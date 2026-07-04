@@ -451,6 +451,62 @@ const BuriedSlide: Page = () => (
   </div>
 );
 
+const NewsBlindSlide: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      padding: '0 140px',
+    }}
+  >
+    <Eyebrow>Also true</Eyebrow>
+
+    <h1
+      style={{
+        fontFamily: 'var(--osd-font-display)',
+        fontSize: 90,
+        fontWeight: 800,
+        margin: '32px 0 0',
+        lineHeight: 1.15,
+        letterSpacing: '-0.02em',
+        maxWidth: 1400,
+      }}
+    >
+      I don't read the news either.
+    </h1>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        lineHeight: 1.6,
+        color: muted,
+        maxWidth: 1300,
+        margin: '48px 0 0',
+      }}
+    >
+      Not unless it's impossible to miss — a strike. Or that girl who supposedly died from watching Death Note. I still don't know what actually happened there.
+    </p>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        fontWeight: 700,
+        color: 'var(--osd-accent)',
+        maxWidth: 1300,
+        margin: '32px 0 0',
+      }}
+    >
+      Beyond that, I have no idea what's being built in this country, or what's falling apart.
+    </p>
+  </div>
+);
+
 const Cover: Page = () => (
   <div
     style={{
@@ -727,4 +783,4 @@ export const meta: SlideMeta = {
   title: 'Ikotofetsy — Intro',
   createdAt: '2026-07-02T20:24:12.135Z',
 };
-export default [ReraCover, WhySlide, MistakeSlide, BuriedSlide, Cover, Stack, WhatToExpectSlide, LetsGoSlide] satisfies Page[];
+export default [ReraCover, WhySlide, MistakeSlide, BuriedSlide, NewsBlindSlide, Cover, Stack, WhatToExpectSlide, LetsGoSlide] satisfies Page[];
