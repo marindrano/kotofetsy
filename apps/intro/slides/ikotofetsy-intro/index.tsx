@@ -10,6 +10,7 @@ const LOTTIE_CDN = 'https://unpkg.com/lottie-web@5.12.2/build/player/lottie.min.
 const LOTTIE_BAGS_UNDER_EYES = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1fae9/lottie.json';
 const LOTTIE_DISAPPOINTED = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f61e/lottie.json';
 const LOTTIE_HUGGING_FACE = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f917/lottie.json';
+const LOTTIE_ROCKET = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f680/lottie.json';
 
 function loadLottieScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve();
@@ -68,10 +69,13 @@ export const design: DesignSystem = {
     accent: '#EAAA08',
   },
   fonts: {
-    display: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif',
+    display: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
     body: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif',
   },
-  typeScale: { hero: 160, body: 34 },
+  typeScale: {
+    hero: 160,
+    body: 34,
+  },
   radius: 4,
 };
 
@@ -631,8 +635,96 @@ const Stack: Page = () => (
   </div>
 );
 
+const WhatToExpectSlide: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      padding: '0 140px',
+    }}
+  >
+    <Eyebrow>Along the way</Eyebrow>
+
+    <h1
+      style={{
+        fontFamily: 'var(--osd-font-display)',
+        fontSize: 90,
+        fontWeight: 800,
+        margin: '32px 0 0',
+        lineHeight: 1.15,
+        letterSpacing: '-0.02em',
+        maxWidth: 1400,
+      }}
+    >
+      We will research, learn, and build — in public.
+    </h1>
+
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginTop: 48 }}>
+      {[
+        'Real problems getting solved, not a highlight reel',
+        'Mistakes included — you learn exactly when I do',
+        'A Malagasy AI product going from zero to shipped',
+      ].map((item) => (
+        <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 5, background: 'var(--osd-accent)', flexShrink: 0 }} />
+          <span style={{ fontFamily: 'var(--osd-font-body)', fontSize: 34, color: muted }}>{item}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const LetsGoSlide: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '0 140px',
+    }}
+  >
+    <LottiePlayer src={LOTTIE_ROCKET} size={260} />
+
+    <h1
+      style={{
+        fontFamily: 'var(--osd-font-display)',
+        fontSize: 'var(--osd-size-hero)',
+        fontWeight: 800,
+        margin: '48px 0 0',
+        lineHeight: 1.05,
+        letterSpacing: '-0.02em',
+        textAlign: 'center',
+      }}
+    >
+      Let's build.
+    </h1>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        lineHeight: 1.5,
+        color: muted,
+        maxWidth: 1100,
+        margin: '32px 0 0',
+        textAlign: 'center',
+      }}
+    >
+      And you're watching it get built.
+    </p>
+  </div>
+);
+
 export const meta: SlideMeta = {
   title: 'Ikotofetsy — Intro',
   createdAt: '2026-07-02T20:24:12.135Z',
 };
-export default [ReraCover, WhySlide, MistakeSlide, BuriedSlide, Cover, Stack] satisfies Page[];
+export default [ReraCover, WhySlide, MistakeSlide, BuriedSlide, Cover, Stack, WhatToExpectSlide, LetsGoSlide] satisfies Page[];
