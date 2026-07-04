@@ -1,7 +1,65 @@
+import { useEffect, useRef } from 'react';
 import type { DesignSystem, Page, SlideMeta } from '@open-slide/core';
 
 import logo from './assets/logo.svg';
 import newspaperPhoto from './assets/newspaper.jpg';
+
+const LOTTIE_SCRIPT_ID = 'osd-lottie-web';
+const LOTTIE_CDN = 'https://unpkg.com/lottie-web@5.12.2/build/player/lottie.min.js';
+
+const LOTTIE_BAGS_UNDER_EYES = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1fae9/lottie.json';
+const LOTTIE_DISAPPOINTED = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f61e/lottie.json';
+const LOTTIE_HUGGING_FACE = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f917/lottie.json';
+
+function loadLottieScript(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  const w = window as unknown as { lottie?: unknown };
+  if (w.lottie) return Promise.resolve();
+
+  const existing = document.getElementById(LOTTIE_SCRIPT_ID);
+  if (existing) {
+    return new Promise((resolve) => {
+      const check = () => (w.lottie ? resolve() : setTimeout(check, 50));
+      check();
+    });
+  }
+
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.id = LOTTIE_SCRIPT_ID;
+    script.src = LOTTIE_CDN;
+    script.onload = () => resolve();
+    document.head.appendChild(script);
+  });
+}
+
+const LottiePlayer = ({ src, size }: { src: string; size: number }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let anim: { destroy: () => void } | undefined;
+
+    loadLottieScript().then(() => {
+      if (cancelled || !containerRef.current) return;
+      const lottie = (window as unknown as { lottie: { loadAnimation: (opts: unknown) => { destroy: () => void } } }).lottie;
+      anim = lottie.loadAnimation({
+        container: containerRef.current,
+        renderer: 'svg',
+        loop: true,
+        autoplay: true,
+        path: src,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      anim?.destroy();
+    };
+  }, [src]);
+
+  return <div ref={containerRef} style={{ width: size, height: size, flexShrink: 0 }} />;
+};
 
 export const design: DesignSystem = {
   palette: {
@@ -78,6 +136,317 @@ const Feature = ({ icon, label }: { icon: React.ReactNode; label: string }) => (
   </div>
 );
 
+const ReraCover: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'row',
+      position: 'relative',
+    }}
+  >
+    <div
+      style={{
+        width: '66.6%',
+        flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '110px 140px',
+        minWidth: 0,
+      }}
+    >
+      <div style={{ transform: 'rotate(-6deg)', marginLeft: 40 }}>
+        <LottiePlayer src={LOTTIE_BAGS_UNDER_EYES} size={230} />
+      </div>
+
+      <span
+        style={{
+          fontFamily: 'var(--osd-font-body)',
+          fontSize: 24,
+          fontWeight: 700,
+          letterSpacing: '0.3em',
+          textTransform: 'uppercase',
+          color: 'var(--osd-accent)',
+          marginTop: 32,
+        }}
+      >
+        Status update
+      </span>
+
+      <h1
+        style={{
+          fontFamily: 'var(--osd-font-display)',
+          fontSize: 118,
+          fontWeight: 800,
+          margin: '24px 0 0',
+          lineHeight: 1.1,
+          letterSpacing: '-0.02em',
+          maxWidth: 1150,
+        }}
+      >
+        Reraka mitady asa aho
+      </h1>
+
+      <div
+        style={{
+          width: 120,
+          height: 6,
+          borderRadius: 3,
+          background: 'var(--osd-accent)',
+          marginTop: 40,
+        }}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 32 }}>
+        <span
+          style={{
+            fontFamily: 'var(--osd-font-display)',
+            fontSize: 44,
+            fontWeight: 800,
+            color: 'var(--osd-text)',
+          }}
+        >
+          25 sent
+        </span>
+        <span style={{ fontFamily: 'var(--osd-font-body)', fontSize: 32, color: muted }}>
+          →
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--osd-font-display)',
+            fontSize: 44,
+            fontWeight: 800,
+            color: 'var(--osd-accent)',
+          }}
+        >
+          2 replied
+        </span>
+      </div>
+
+      <div style={{ transform: 'rotate(5deg)', marginTop: 32, marginLeft: '58%' }}>
+        <LottiePlayer src={LOTTIE_DISAPPOINTED} size={230} />
+      </div>
+    </div>
+
+    <div
+      style={{
+        width: '33.4%',
+        flexShrink: 0,
+        height: '100%',
+        background: 'rgba(234, 170, 8, 0.08)',
+      }}
+    />
+  </div>
+);
+
+const Eyebrow = ({ children }: { children: React.ReactNode }) => (
+  <span
+    style={{
+      fontFamily: 'var(--osd-font-body)',
+      fontSize: 24,
+      fontWeight: 700,
+      letterSpacing: '0.3em',
+      textTransform: 'uppercase',
+      color: 'var(--osd-accent)',
+    }}
+  >
+    {children}
+  </span>
+);
+
+const WhySlide: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      padding: '0 140px',
+    }}
+  >
+    <Eyebrow>The reason</Eyebrow>
+
+    <h1
+      style={{
+        fontFamily: 'var(--osd-font-display)',
+        fontSize: 96,
+        fontWeight: 800,
+        margin: '32px 0 0',
+        lineHeight: 1.15,
+        letterSpacing: '-0.02em',
+        maxWidth: 1400,
+      }}
+    >
+      I don't have proof of what counts as work currency.
+    </h1>
+
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, marginTop: 48 }}>
+      {['A diploma', 'Provable experience', 'Visibility', 'A solid GitHub profile'].map((item) => (
+        <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ width: 10, height: 10, borderRadius: 5, background: 'var(--osd-accent)', flexShrink: 0 }} />
+          <span style={{ fontFamily: 'var(--osd-font-body)', fontSize: 34, color: muted }}>{item}</span>
+        </div>
+      ))}
+    </div>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 30,
+        lineHeight: 1.5,
+        color: muted,
+        maxWidth: 1300,
+        margin: '40px 0 0',
+      }}
+    >
+      3 years of experience — but most of it lives in projects I can't talk about. One or two things aside, none of it is provable.
+    </p>
+  </div>
+);
+
+const MistakeSlide: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      padding: '0 140px',
+    }}
+  >
+    <Eyebrow>The mistake</Eyebrow>
+
+    <h1
+      style={{
+        fontFamily: 'var(--osd-font-display)',
+        fontSize: 90,
+        fontWeight: 800,
+        margin: '32px 0 0',
+        lineHeight: 1.15,
+        letterSpacing: '-0.02em',
+        maxWidth: 1400,
+      }}
+    >
+      I made a fatal mistake.
+    </h1>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        lineHeight: 1.6,
+        color: muted,
+        maxWidth: 1300,
+        margin: '48px 0 0',
+      }}
+    >
+      Back when I wasn't professionally tied to anything, I didn't use Git — even when my brother told me to.
+    </p>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        lineHeight: 1.6,
+        color: 'var(--osd-text)',
+        maxWidth: 1300,
+        margin: '32px 0 0',
+      }}
+    >
+      One day, he decided to delete everything on his computer. I didn't use GitHub either — so there was nowhere else it lived.
+    </p>
+  </div>
+);
+
+const BuriedSlide: Page = () => (
+  <div
+    style={{
+      ...fill,
+      background: 'var(--osd-bg)',
+      color: 'var(--osd-text)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      padding: '0 140px',
+    }}
+  >
+    <Eyebrow>The years after</Eyebrow>
+
+    <h1
+      style={{
+        fontFamily: 'var(--osd-font-display)',
+        fontSize: 96,
+        fontWeight: 800,
+        margin: '32px 0 0',
+        lineHeight: 1.15,
+        letterSpacing: '-0.02em',
+        maxWidth: 1450,
+      }}
+    >
+      My GitHub history is basically garbage.
+    </h1>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        lineHeight: 1.6,
+        color: muted,
+        maxWidth: 1300,
+        margin: '48px 0 0',
+      }}
+    >
+      After that, I got employed. My GitHub account was never used there — they had their own self-hosted GitLab, and gave me a company email for everything.
+    </p>
+
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 40 }}>
+      <span
+        style={{
+          fontFamily: 'var(--osd-font-display)',
+          fontSize: 44,
+          fontWeight: 800,
+          color: 'var(--osd-text)',
+        }}
+      >
+        8 years coding
+      </span>
+      <span style={{ fontFamily: 'var(--osd-font-body)', fontSize: 32, color: muted }}>
+        →
+      </span>
+      <span
+        style={{
+          fontFamily: 'var(--osd-font-display)',
+          fontSize: 44,
+          fontWeight: 800,
+          color: 'var(--osd-accent)',
+        }}
+      >
+        0 public history
+      </span>
+    </div>
+
+    <p
+      style={{
+        fontFamily: 'var(--osd-font-body)',
+        fontSize: 34,
+        fontWeight: 700,
+        color: 'var(--osd-accent)',
+        margin: '56px 0 0',
+      }}
+    >
+      So here's what we're going to do.
+    </p>
+  </div>
+);
+
 const Cover: Page = () => (
   <div
     style={{
@@ -100,20 +469,25 @@ const Cover: Page = () => (
         minWidth: 0,
       }}
     >
-      <img src={logo} alt="Ikotofetsy" width={128} height={128} style={{ display: 'block' }} />
+      <Eyebrow>Our first project, built in public</Eyebrow>
 
-      <h1
-        style={{
-          fontFamily: 'var(--osd-font-display)',
-          fontSize: 'var(--osd-size-hero)',
-          fontWeight: 800,
-          margin: '48px 0 0',
-          lineHeight: 1.0,
-          letterSpacing: '-0.02em',
-        }}
-      >
-        Ikotofetsy
-      </h1>
+      <img src={logo} alt="Ikotofetsy" width={128} height={128} style={{ display: 'block', marginTop: 32 }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginTop: 48 }}>
+        <h1
+          style={{
+            fontFamily: 'var(--osd-font-display)',
+            fontSize: 'var(--osd-size-hero)',
+            fontWeight: 800,
+            margin: 0,
+            lineHeight: 1.0,
+            letterSpacing: '-0.02em',
+          }}
+        >
+          Ikotofetsy
+        </h1>
+        <LottiePlayer src={LOTTIE_HUGGING_FACE} size={110} />
+      </div>
 
       <p
         style={{
@@ -252,6 +626,7 @@ const Stack: Page = () => (
       <StackRow role="Backend" tech="Go + PocketBase + Meilisearch" />
       <StackRow role="Frontend" tech="TanStack Start" />
       <StackRow role="Agent" tech="Eve (Vercel)" />
+      <StackRow role="Local tooling" tech="Charm (charmbracelet) — CLIs for on-device jobs" />
     </div>
   </div>
 );
@@ -260,4 +635,4 @@ export const meta: SlideMeta = {
   title: 'Ikotofetsy — Intro',
   createdAt: '2026-07-02T20:24:12.135Z',
 };
-export default [Cover, Stack] satisfies Page[];
+export default [ReraCover, WhySlide, MistakeSlide, BuriedSlide, Cover, Stack] satisfies Page[];

@@ -33,12 +33,13 @@ Detailed component design lives in [`architecture/`](./architecture/README.md) (
 
 At a glance:
 
-| Layer      | Technology                                                  |
-|------------|--------------------------------------------------------------|
-| Crawler    | Python + [Scrapling](https://github.com/D4Vinci/Scrapling)  |
-| Backend    | Go + [PocketBase](https://pocketbase.io) + [Meilisearch](https://www.meilisearch.com) |
-| Frontend   | TanStack Start                                              |
-| Agent      | Eve (Vercel)                                                |
+| Layer         | Technology                                                  |
+|---------------|--------------------------------------------------------------|
+| Crawler       | Python + [Scrapling](https://github.com/D4Vinci/Scrapling)  |
+| Backend       | Go + [PocketBase](https://pocketbase.io) + [Meilisearch](https://www.meilisearch.com) |
+| Frontend      | TanStack Start                                              |
+| Agent         | Eve (Vercel)                                                |
+| Local tooling | [Charm](https://charm.sh) (charmbracelet) — CLIs for on-device jobs like daily scraping runs or local AI analysis |
 
 ## Status
 

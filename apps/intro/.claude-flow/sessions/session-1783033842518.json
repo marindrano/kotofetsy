@@ -1,0 +1,14 @@
+{
+  "id": "session-1783033842518",
+  "startedAt": "2026-07-02T23:10:42.518Z",
+  "cwd": "/Users/mac/Code/marindrano/kotofetsy/apps/intro",
+  "context": {},
+  "metrics": {
+    "edits": 5,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-07-04T14:18:31.284Z",
+  "duration": 140868766
+}
