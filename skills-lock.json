@@ -18,6 +18,12 @@
       "sourceType": "github",
       "skillPath": "skills/frontend-design/SKILL.md",
       "computedHash": "4eabc66183767153e404b39d1b839b1c37f2d82d86f0a0d7e880a579d8d62336"
+    },
+    "pinchtab": {
+      "source": "pinchtab/pinchtab",
+      "sourceType": "github",
+      "skillPath": "skills/pinchtab/SKILL.md",
+      "computedHash": "aabcb0c82837b10e4c7f5f8de82d6672e23d84819a207973922a34ffb64b2f9e"
     }
   }
 }
