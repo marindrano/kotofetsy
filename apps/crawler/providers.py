@@ -70,10 +70,7 @@ class MadagascarTribune(NewsSource):
             return False  # only flat relative article slugs, no external/absolute links
         return True
 
-    def list_article_urls(self, limit: Optional[int] = None) -> list[str]:
-        urls: list[str] = []
-        seen: set[str] = set()
-
+    def list_article_urls(self):
         for category_url in self._discover_categories():
             page_url = category_url
             for page_num in range(self._max_pages_per_category):
@@ -93,18 +90,11 @@ class MadagascarTribune(NewsSource):
                     href = link.attrib.get("href")
                     if not self._is_article_link(href):
                         continue
-                    full_url = urljoin(page_url, href)
-                    if full_url not in seen:
-                        seen.add(full_url)
-                        urls.append(full_url)
-                        new_on_page += 1
-                    if limit is not None and len(urls) >= limit:
-                        return urls
+                    new_on_page += 1
+                    yield urljoin(page_url, href)
 
                 if new_on_page == 0:
                     break  # this category is exhausted
-
-        return urls
 
 
 class Newsmada(NewsSource):
@@ -162,21 +152,13 @@ class FreeNews(NewsSource):
         category="a[href*='/categories/']",
     )
 
-    def list_article_urls(self, limit: Optional[int] = None) -> list[str]:
+    def list_article_urls(self):
         page = Fetcher.get(self._seed_url, headers={"User-Agent": USER_AGENT})
-        urls: list[str] = []
-        seen = set()
         for link in page.css("h1 a, h2 a, h3 a"):
             href = link.attrib.get("href")
             if not href or "/author/" in href or "/categories/" in href:
                 continue
-            full_url = urljoin(self._seed_url, href)
-            if full_url not in seen:
-                seen.add(full_url)
-                urls.append(full_url)
-            if limit is not None and len(urls) >= limit:
-                break
-        return urls
+            yield urljoin(self._seed_url, href)
 
 
 class Moov(NewsSource):
@@ -191,21 +173,12 @@ class Moov(NewsSource):
         category="a[href*='/actualites/']",
     )
 
-    def list_article_urls(self, limit: Optional[int] = None) -> list[str]:
+    def list_article_urls(self):
         page = Fetcher.get(self._seed_url, headers={"User-Agent": USER_AGENT})
-        urls: list[str] = []
-        seen = set()
         for link in page.css("a[href*='/article/']"):
             href = link.attrib.get("href")
-            if not href:
-                continue
-            full_url = urljoin(self._seed_url, href)
-            if full_url not in seen:
-                seen.add(full_url)
-                urls.append(full_url)
-            if limit is not None and len(urls) >= limit:
-                break
-        return urls
+            if href:
+                yield urljoin(self._seed_url, href)
 
 
 class MalagasyNewsMBS(NewsSource):

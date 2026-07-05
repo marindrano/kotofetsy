@@ -6,6 +6,7 @@ import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from abc import ABC
+from collections.abc import Iterator
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,11 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 )
+
+ROOT_DIR = Path(__file__).parent
+DATA_DIR = ROOT_DIR / "data"
+STATE_DIR = ROOT_DIR / "state"
+LOG_DIR = ROOT_DIR / "logs"
 
 FRENCH_MONTHS = {
     "janvier": 1,
@@ -51,11 +57,15 @@ def _fetch_xml(url: str) -> str:
         return raw.decode("utf-8", errors="replace").lstrip()
 
 
-def discover_sitemap_urls(sitemap_url: str, limit: Optional[int] = None) -> list[str]:
-    """Walk a standard sitemap (index or flat urlset) down to leaf article URLs.
-    Covers 4 of 5 providers generically — Tribune overrides list_article_urls() instead,
-    since its sitemap only lists section pages, not articles."""
-    urls: list[str] = []
+def discover_sitemap_urls(sitemap_url: str) -> Iterator[str]:
+    """Walk a standard sitemap (index or flat urlset), yielding leaf article URLs lazily.
+    Covers most providers generically — Tribune/FreeNews/Moov override list_article_urls()
+    instead, since they have no article-level sitemap.
+
+    A generator, not a list: the caller (crawl()) stops pulling once it has enough NEW
+    (not-already-seen) articles, which means we only fetch as many sitemap sub-files as
+    actually needed this run — important for Midi's ~118 sub-sitemaps, where re-fetching
+    all of them on every run just to filter would be wasteful."""
     to_visit = [sitemap_url]
     while to_visit:
         current = to_visit.pop(0)
@@ -73,10 +83,7 @@ def discover_sitemap_urls(sitemap_url: str, limit: Optional[int] = None) -> list
         if root.tag.endswith("sitemapindex"):
             to_visit.extend(locs)
         else:
-            urls.extend(locs)
-        if limit is not None and len(urls) >= limit:
-            return urls[:limit]
-    return urls
+            yield from locs
 
 
 def parse_french_date(text: str) -> Optional[str]:
@@ -113,17 +120,55 @@ class NewsSource(ABC):
     sitemap_url: Optional[str] = None
     needs_stealth: bool = False  # set True for sites behind a JS anti-bot challenge (e.g. Midi/Sucuri)
 
+    # --- resumability: state (seen_urls) + log paths, one file pair per provider ---
+
+    @property
+    def _state_path(self) -> Path:
+        return STATE_DIR / f"{self.source_name}.json"
+
+    @property
+    def _log_path(self) -> Path:
+        return LOG_DIR / f"{self.source_name}.log"
+
+    @property
+    def _data_path(self) -> Path:
+        return DATA_DIR / self.source_name / "articles.jsonl"
+
+    def _load_state(self) -> dict:
+        if not self._state_path.exists():
+            return {"seen_urls": [], "total_saved": 0}
+        return json.loads(self._state_path.read_text(encoding="utf-8"))
+
+    def _save_state(self, state: dict) -> None:
+        # Atomic write: a crash mid-write leaves either the old or the new complete
+        # file, never a half-written/corrupt one.
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._state_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(self._state_path)
+
+    def _log(self, message: str) -> None:
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._log_path.open("a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+
+    def _append_article(self, article: Article) -> None:
+        self._data_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._data_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(article), ensure_ascii=False) + "\n")
+
     def fetch(self, url: str):
         if self.needs_stealth:
             return StealthyFetcher.fetch(url)
         return Fetcher.get(url, headers={"User-Agent": USER_AGENT})
 
-    def list_article_urls(self, limit: Optional[int] = None) -> list[str]:
+    def list_article_urls(self) -> Iterator[str]:
         if not self.sitemap_url:
             raise NotImplementedError(
                 f"{self.source_name}: no sitemap_url set, override list_article_urls()"
             )
-        return discover_sitemap_urls(self.sitemap_url, limit=limit)
+        yield from discover_sitemap_urls(self.sitemap_url)
 
     def parse_article(self, url: str) -> Optional[Article]:
         page = self.fetch(url)
@@ -177,20 +222,48 @@ class NewsSource(ABC):
         )
 
     def crawl(self, limit: int = 10) -> list[Article]:
-        urls = self.list_article_urls(limit=limit)
-        articles = []
-        for url in urls[:limit]:
-            article = self.parse_article(url)
-            if article:
-                articles.append(article)
-        return articles
+        """Resumable: skips URLs already saved in a prior run, checkpoints after every
+        article (state file + JSONL append), so a crash/interrupt only ever loses the
+        one article that was in flight — everything before it is already on disk."""
+        state = self._load_state()
+        seen: set[str] = set(state.get("seen_urls", []))
+        saved: list[Article] = []
+        self._log(f"run started, {len(seen)} already seen, target {limit} new")
 
-    def save(self, articles: list[Article], out_dir: Path) -> Path:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        date_str = datetime.now(timezone.utc).date().isoformat()
-        out_path = out_dir / f"{date_str}.json"
-        out_path.write_text(
-            json.dumps([asdict(a) for a in articles], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return out_path
+        try:
+            for url in self.list_article_urls():
+                if url in seen:
+                    continue
+                try:
+                    article = self.parse_article(url)
+                except Exception as exc:  # network/parsing failure on one article — skip, don't crash the run, retry next time
+                    self._log(f"error fetching {url}: {exc}")
+                    continue
+                if not article:
+                    self._log(f"skip (title selector didn't match) {url}")
+                    continue
+
+                seen.add(url)
+                saved.append(article)
+                self._append_article(article)
+                state["seen_urls"] = sorted(seen)
+                state["total_saved"] = state.get("total_saved", 0) + 1
+                state["last_run_at"] = datetime.now(timezone.utc).isoformat()
+                self._save_state(state)
+                self._log(f"saved {url}")
+
+                if len(saved) >= limit:
+                    state["last_stopped_reason"] = "limit reached"
+                    self._save_state(state)
+                    self._log(f"stopped: limit reached ({limit} new articles)")
+                    return saved
+
+            state["last_stopped_reason"] = "exhausted"
+            self._save_state(state)
+            self._log("stopped: no more new urls to discover")
+        except Exception as exc:  # discovery itself failed (e.g. network cut) — state up to the last saved article is intact
+            state["last_stopped_reason"] = f"error: {exc}"
+            self._save_state(state)
+            self._log(f"stopped: error during discovery: {exc}")
+            raise
+        return saved
