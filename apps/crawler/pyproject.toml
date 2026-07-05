@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "scrapling[fetchers]>=0.4.9",
+    "scrapling[all]>=0.4.10",
 ]
 
 [dependency-groups]
