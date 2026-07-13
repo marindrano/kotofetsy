@@ -1,0 +1,71 @@
+[2026-07-13T18:20:36.814Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the codebase, here's the comprehensive security report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 60,\n      \"description\": \"Command Injection Risk: Provider name parameter is passed to exec.Command without validation. While limited by hardcoded list, flag-based input should be validated against whitelist.\",\n      \"category\": \"command-injection\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 36,\n      \"description\": \"Path Traversal Risk: --crawler-dir flag accepts arbitrary filesystem paths without validation. Attacker could specify a path to arbitrary Python files and execute them.\",\n      \"category\": \"path-traversal\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 42,\n      \"description\": \"Incomplete Input Validation: Provider names from flag splitting are not trimmed. If user passes ' provider' with leading space, it won't match the hardcoded list.\",\n      \"category\": \"input-validation\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"tui.go\",\n      \"line\": 267,\n      \"description\": \"Unrecovered Panic in Goroutine: Background goroutines spawned in startRun() lack panic recovery. A panic in runCrawler would crash the application.\",\n      \"category\": \"error-handling\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"tui.go\",\n      \"line\": 237,\n      \"description\": \"Potential Race Condition: m.runCursor access in highlighted() is not synchronized with concurrent updates from handleKey().\",\n      \"category\": \"concurrency\"\n    }\n  ],\n  \"riskScore\": 28,\n  \"recommendations\": [\n    \"Validate --crawler-dir path: Use filepath.Abs() and verify it's within expected directories; reject paths with '..' or symlinks pointing outside allowed scope\",\n    \"Validate provider names: When --providers flag is used, trim input and validate each name against the hardcoded providers list before passing to exec.Command\",\n    \"Add panic recovery: Wrap the goroutine body in startRun() with recover() to prevent application crash on panic\",\n    \"Trim flag inputs: Call strings.TrimSpace() on --providers flag value before splitting on commas\",\n    \"Protect shared state: Use sync.Mutex for accessing m.runCursor if concurrent access patterns continue\",\n    \"Use Go's filepath package: Replace manual path construction with filepath.Join and filepath.Abs for safe path handling\",\n    \"Remove shell interpretation: Avoid exec.Command with shell=true; current implementation is safe but document the assumption\"\n  ],\n  \"summary\": {\n    \"total_issues\": 5,\n    \"high\": 0,\n    \"medium\": 2,\n    \"low\": 3,\n    \"no_secrets_detected\": true,\n    \"no_sql_injection\": true,\n    \"no_xss_vulnerabilities\": true,\n    \"dependency_status\": \"healthy\"\n  }\n}\n```\n\n## Key Findings\n\n**Good Security Practices:**\n- ✅ No hardcoded secrets, API keys, or credentials\n- ✅ No SQL injection vectors (CLI app, no database code visible)\n- ✅ No XSS vulnerabilities (TUI application, not web-facing)\n- ✅ Dependencies from trusted sources (Charmbracelet libraries)\n- ✅ Go version (1.26.1) is current\n\n**Areas for Improvement:**\n1. **Path Validation** (Medium) - The `--crawler-dir` flag should validate and restrict paths\n2. **Input Sanitization** (Medium) - Provider names from flags need whitelist validation\n3. **Error Handling** (Low) - Add panic recovery in background goroutines\n4. **String Trimming** (Low) - Trim flag inputs to prevent whitespace bypasses\n5. **Concurrency Safety** (Low) - Protect shared cursor variable with mutex\n\n**Risk Score: 28/100** - Low to moderate risk. The application has a CLI-specific threat model with limited attack surface since it primarily executes Python subprocesses with hardcoded provider names.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 60,
+        "description": "Command Injection Risk: Provider name parameter is passed to exec.Command without validation. While limited by hardcoded list, flag-based input should be validated against whitelist.",
+        "category": "command-injection"
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 36,
+        "description": "Path Traversal Risk: --crawler-dir flag accepts arbitrary filesystem paths without validation. Attacker could specify a path to arbitrary Python files and execute them.",
+        "category": "path-traversal"
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 42,
+        "description": "Incomplete Input Validation: Provider names from flag splitting are not trimmed. If user passes ' provider' with leading space, it won't match the hardcoded list.",
+        "category": "input-validation"
+      },
+      {
+        "severity": "low",
+        "file": "tui.go",
+        "line": 267,
+        "description": "Unrecovered Panic in Goroutine: Background goroutines spawned in startRun() lack panic recovery. A panic in runCrawler would crash the application.",
+        "category": "error-handling"
+      },
+      {
+        "severity": "low",
+        "file": "tui.go",
+        "line": 237,
+        "description": "Potential Race Condition: m.runCursor access in highlighted() is not synchronized with concurrent updates from handleKey().",
+        "category": "concurrency"
+      }
+    ],
+    "riskScore": 28,
+    "recommendations": [
+      "Validate --crawler-dir path: Use filepath.Abs() and verify it's within expected directories; reject paths with '..' or symlinks pointing outside allowed scope",
+      "Validate provider names: When --providers flag is used, trim input and validate each name against the hardcoded providers list before passing to exec.Command",
+      "Add panic recovery: Wrap the goroutine body in startRun() with recover() to prevent application crash on panic",
+      "Trim flag inputs: Call strings.TrimSpace() on --providers flag value before splitting on commas",
+      "Protect shared state: Use sync.Mutex for accessing m.runCursor if concurrent access patterns continue",
+      "Use Go's filepath package: Replace manual path construction with filepath.Join and filepath.Abs for safe path handling",
+      "Remove shell interpretation: Avoid exec.Command with shell=true; current implementation is safe but document the assumption"
+    ],
+    "summary": {
+      "total_issues": 5,
+      "high": 0,
+      "medium": 2,
+      "low": 3,
+      "no_secrets_detected": true,
+      "no_sql_injection": true,
+      "no_xss_vulnerabilities": true,
+      "dependency_status": "healthy"
+    }
+  },
+  "durationMs": 78688,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:20:36.814Z",
+  "executionId": "audit_1783966758126_lc05ox"
+}

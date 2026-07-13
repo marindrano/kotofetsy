@@ -1,0 +1,72 @@
+[2026-07-13T18:39:37.120Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Performance Analysis — `apps/cli` (Go TUI + subprocess crawler runner)\n\nThis directory is a small Bubble Tea TUI (~430 lines across `main.go`/`tui.go`) that shells out to a Python crawler per provider. The requested categories (N+1 queries, React re-renders) don't map literally onto a Go TUI, but there are direct analogues — a render-loop framework has the same \"recompute-on-every-frame\" and \"unbounded-accumulation\" failure modes as React. Findings below, ordered by impact.\n\n### 1. `articlesSaved()` recomputes from scratch on every render tick\n`tui.go:360-368`, called from `viewRunning()` at `tui.go:398`:\n```go\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}\n```\n`View()` fires on **every** message — including `spinner.TickMsg`, which arrives ~10×/second by default. For each tick, this does a full linear scan of *every provider's entire accumulated log* just to redraw a count that only changes when a new `statusMsg` arrives. For long crawls (`--limit 0`) this becomes O(providers × total_lines) work repeated many times a second, for no reason.\n\n**Fix:** maintain a running counter on `providerStatus`, incremented once in the `statusMsg` handler when the line matches:\n```go\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.state = stateRunning\n    st.lines = append(st.lines, msg.line)\n    if strings.HasPrefix(msg.line, \"  - \") {\n        st.articleCount++\n    }\n```\nThen `viewRunning` just reads `st.articleCount` — O(1) instead of O(n) per frame.\n\n### 2. `refreshViewport()` rejoins the entire log history on every new line\n`tui.go:245-252`, called from the `statusMsg` handler at `tui.go:112`:\n```go\nfunc (m *model) refreshViewport() {\n    ...\n    m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n    m.vp.GotoBottom()\n}\n```\nEvery single stdout line from the highlighted provider triggers a `strings.Join` over its **entire** history so far. One line in → O(n) work; over a run producing n lines total, that's O(n²).\n\n**Fix:** cache the joined string on `providerStatus` and append incrementally instead of rebuilding:\n```go\nst.content.WriteString(msg.line + \"\\n\")\nm.vp.SetContent(st.content.String()) // still O(n) here, but avoids reformatting the join itself\n```\nor better, only refresh the viewport on a throttled ticker (e.g. redraw at most every 100ms) rather than per-line, since terminal redraw rate is the real bottleneck, not string building.\n\n### 3. Unbounded log retention (`providerStatus.lines`)\n`tui.go:36`, appended without limit in both `statusMsg` (`tui.go:110`) and `doneMsg` (`tui.go:120`). With `--limit 0` (\"run until exhausted\"), a provider can emit thousands of lines over a long crawl, and they're all kept in memory for the process lifetime — compounding issues #1 and #2 as the run progresses.\n\n**Fix:** cap retained lines to what the viewport can usefully show (e.g. keep last 2,000 lines in a ring buffer), and if full history matters, write it to disk instead of holding it all in memory.\n\n### 4. No concurrency cap / no cleanup of orphaned subprocesses (the \"N+1\" analogue here)\n`main.go:80-95` (headless) and `tui.go:254-274` (`startRun`) both spawn one `exec.Command(\"uv\", \"run\", ...)` per selected provider, unconditionally, with no semaphore:\n```go\ngo func(name string) {\n    ...\n    err := runCrawler(name, limit, crawlerDir, func(line string) {...})\n```\nTwo related problems:\n- **No concurrency ceiling.** Selecting \"all\" launches all 11 (soon more?) `uv run` processes at once, each paying its own `uv`/venv-resolution startup cost simultaneously. Fine at 11, but there's no bound if the provider list grows — this is the closest analogue to an N+1 fan-out.\n- **No process cleanup on exit.** If the Go binary is killed externally (SIGTERM/SIGKILL rather than the `q` key), the spawned Python child processes have no context-based cancellation (`exec.CommandContext`) tying their lifetime to the parent's, so they can be orphaned and keep running/consuming resources after the TUI exits.\n\n**Fix:**\n```go\nfunc runCrawler(ctx context.Context, name string, limit int, crawlerDir string, onLine func(string)) error {\n    cmd := exec.CommandContext(ctx, \"uv\", \"run\", \"main.py\", name, \"--limit\", fmt.Sprint(limit))\n    ...\n}\n```\nwired to a `context.Context` cancelled on `tea.Quit`/interrupt, plus a `chan struct{}` semaphore sized to `runtime.NumCPU()` (or a config flag) to bound concurrent subprocesses.\n\n### 5. `countSelected()` — same recompute-in-render pattern, low severity\n`tui.go:296-304`, called every `viewPicking()` render (`tui.go:333`). Iterates the whole `selected` map per frame. At 11 providers this is negligible, but it's the same anti-pattern as #1 — worth fixing alongside it for consistency, since it'll stop being negligible if the provider list grows.\n\n---\n\n**Not applicable in this directory:** N+1 DB queries and React re-renders don't exist here — there's no database or React tree in `apps/cli`. If you want that specific analysis, it belongs in `apps/crawler` (the Python crawler, which does I/O against provider state files) — but my Bash access this session is sandboxed to `apps/cli` only, so I couldn't read those files. Say the word and I'll spawn an agent scoped to `apps/crawler` for that half of the analysis.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Performance Analysis — `apps/cli` (Go TUI + subprocess crawler runner)",
+        "content": "\nThis directory is a small Bubble Tea TUI (~430 lines across `main.go`/`tui.go`) that shells out to a Python crawler per provider. The requested categories (N+1 queries, React re-renders) don't map literally onto a Go TUI, but there are direct analogues — a render-loop framework has the same \"recompute-on-every-frame\" and \"unbounded-accumulation\" failure modes as React. Findings below, ordered by impact.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. `articlesSaved()` recomputes from scratch on every render tick",
+        "content": "`tui.go:360-368`, called from `viewRunning()` at `tui.go:398`:\n```go\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}\n```\n`View()` fires on **every** message — including `spinner.TickMsg`, which arrives ~10×/second by default. For each tick, this does a full linear scan of *every provider's entire accumulated log* just to redraw a count that only changes when a new `statusMsg` arrives. For long crawls (`--limit 0`) this becomes O(providers × total_lines) work repeated many times a second, for no reason.\n\n**Fix:** maintain a running counter on `providerStatus`, incremented once in the `statusMsg` handler when the line matches:\n```go\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.state = stateRunning\n    st.lines = append(st.lines, msg.line)\n    if strings.HasPrefix(msg.line, \"  - \") {\n        st.articleCount++\n    }\n```\nThen `viewRunning` just reads `st.articleCount` — O(1) instead of O(n) per frame.\n\n",
+        "level": 3
+      },
+      {
+        "title": "2. `refreshViewport()` rejoins the entire log history on every new line",
+        "content": "`tui.go:245-252`, called from the `statusMsg` handler at `tui.go:112`:\n```go\nfunc (m *model) refreshViewport() {\n    ...\n    m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n    m.vp.GotoBottom()\n}\n```\nEvery single stdout line from the highlighted provider triggers a `strings.Join` over its **entire** history so far. One line in → O(n) work; over a run producing n lines total, that's O(n²).\n\n**Fix:** cache the joined string on `providerStatus` and append incrementally instead of rebuilding:\n```go\nst.content.WriteString(msg.line + \"\\n\")\nm.vp.SetContent(st.content.String()) // still O(n) here, but avoids reformatting the join itself\n```\nor better, only refresh the viewport on a throttled ticker (e.g. redraw at most every 100ms) rather than per-line, since terminal redraw rate is the real bottleneck, not string building.\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Unbounded log retention (`providerStatus.lines`)",
+        "content": "`tui.go:36`, appended without limit in both `statusMsg` (`tui.go:110`) and `doneMsg` (`tui.go:120`). With `--limit 0` (\"run until exhausted\"), a provider can emit thousands of lines over a long crawl, and they're all kept in memory for the process lifetime — compounding issues #1 and #2 as the run progresses.\n\n**Fix:** cap retained lines to what the viewport can usefully show (e.g. keep last 2,000 lines in a ring buffer), and if full history matters, write it to disk instead of holding it all in memory.\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. No concurrency cap / no cleanup of orphaned subprocesses (the \"N+1\" analogue here)",
+        "content": "`main.go:80-95` (headless) and `tui.go:254-274` (`startRun`) both spawn one `exec.Command(\"uv\", \"run\", ...)` per selected provider, unconditionally, with no semaphore:\n```go\ngo func(name string) {\n    ...\n    err := runCrawler(name, limit, crawlerDir, func(line string) {...})\n```\nTwo related problems:\n- **No concurrency ceiling.** Selecting \"all\" launches all 11 (soon more?) `uv run` processes at once, each paying its own `uv`/venv-resolution startup cost simultaneously. Fine at 11, but there's no bound if the provider list grows — this is the closest analogue to an N+1 fan-out.\n- **No process cleanup on exit.** If the Go binary is killed externally (SIGTERM/SIGKILL rather than the `q` key), the spawned Python child processes have no context-based cancellation (`exec.CommandContext`) tying their lifetime to the parent's, so they can be orphaned and keep running/consuming resources after the TUI exits.\n\n**Fix:**\n```go\nfunc runCrawler(ctx context.Context, name string, limit int, crawlerDir string, onLine func(string)) error {\n    cmd := exec.CommandContext(ctx, \"uv\", \"run\", \"main.py\", name, \"--limit\", fmt.Sprint(limit))\n    ...\n}\n```\nwired to a `context.Context` cancelled on `tea.Quit`/interrupt, plus a `chan struct{}` semaphore sized to `runtime.NumCPU()` (or a config flag) to bound concurrent subprocesses.\n\n",
+        "level": 3
+      },
+      {
+        "title": "5. `countSelected()` — same recompute-in-render pattern, low severity",
+        "content": "`tui.go:296-304`, called every `viewPicking()` render (`tui.go:333`). Iterates the whole `selected` map per frame. At 11 providers this is negligible, but it's the same anti-pattern as #1 — worth fixing alongside it for consistency, since it'll stop being negligible if the provider list grows.\n\n---\n\n**Not applicable in this directory:** N+1 DB queries and React re-renders don't exist here — there's no database or React tree in `apps/cli`. If you want that specific analysis, it belongs in `apps/crawler` (the Python crawler, which does I/O against provider state files) — but my Bash access this session is sandboxed to `apps/cli` only, so I couldn't read those files. Say the word and I'll spawn an agent scoped to `apps/crawler` for that half of the analysis.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "func articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}"
+      },
+      {
+        "language": "go",
+        "code": "case statusMsg:\n    st := m.statuses[msg.provider]\n    st.state = stateRunning\n    st.lines = append(st.lines, msg.line)\n    if strings.HasPrefix(msg.line, \"  - \") {\n        st.articleCount++\n    }"
+      },
+      {
+        "language": "go",
+        "code": "func (m *model) refreshViewport() {\n    ...\n    m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n    m.vp.GotoBottom()\n}"
+      },
+      {
+        "language": "go",
+        "code": "st.content.WriteString(msg.line + \"\\n\")\nm.vp.SetContent(st.content.String()) // still O(n) here, but avoids reformatting the join itself"
+      },
+      {
+        "language": "go",
+        "code": "go func(name string) {\n    ...\n    err := runCrawler(name, limit, crawlerDir, func(line string) {...})"
+      },
+      {
+        "language": "go",
+        "code": "func runCrawler(ctx context.Context, name string, limit int, crawlerDir string, onLine func(string)) error {\n    cmd := exec.CommandContext(ctx, \"uv\", \"run\", \"main.py\", name, \"--limit\", fmt.Sprint(limit))\n    ...\n}"
+      }
+    ]
+  },
+  "durationMs": 145536,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:39:37.120Z",
+  "executionId": "optimize_1783967831584_b3dm8p"
+}

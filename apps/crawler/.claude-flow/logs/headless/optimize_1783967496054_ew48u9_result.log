@@ -1,0 +1,120 @@
+[2026-07-13T18:34:40.908Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Performance Analysis — `apps/crawler`\n\nThis is a Python CLI crawler (no database, no React) — file-backed JSONL + JSON state. I'm mapping your five categories onto what actually exists here: file I/O in place of DB queries, and no frontend to inspect.\n\n### 1. \"N+1\" pattern → redundant fetches\n\n**`providers.py:207-231` (`Moov.list_article_urls`)** — every URL is fetched **twice**: once in `list_article_urls()` to expand the link frontier, once again in `parse_article()` to extract the article. The code comment even flags this as a known \"ceiling.\" Fix: cache the already-fetched page and hand it to `parse_article`.\n\n```python\n# base.py\ndef parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n# providers.py — Moov.list_article_urls already has `page` in hand; base.crawl()\n# would need a small hook to accept (url, page) pairs instead of bare urls for\n# providers that pre-fetch. Minimal version: an LRU cache keyed by url in fetch().\n```\n\nIf threading a `page` object through is too invasive, a `functools.lru_cache`-style single-slot cache on `fetch()` (keyed by URL) removes the double network round-trip with almost no code change.\n\n### 2. Redundant computation — double text extraction per paragraph\n\n**`base.py:183-187`**:\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- called again here\n)\n```\n\n`get_all_text(strip=True)` walks/strips the DOM subtree — it's called **twice per paragraph** (once to filter, once to join). For a 40-paragraph article that's 80 extractions instead of 40, on every single article across every provider. Fix:\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)\n```\n\n### 3. Caching / I/O amplification — state file rewritten + re-sorted on every article\n\n**`base.py:302-315`** — inside the crawl loop, *every* saved article (and every skipped non-article URL) triggers:\n\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)     # O(n log n), n = total seen so far\nself._save_state(state)                # full JSON serialize + atomic rewrite of the whole file\n```\n\n`state/malagasynews-mbs.json` is already 164 KB / thousands of URLs. For an \"unlimited\" backfill (`--limit 0`), this means: sort a growing list from size *m* to *m+k*, and do a full-file write+rename, **once per article**, k times — i.e. this dominates wall-clock time on large sites more than the actual network fetch does. The atomicity guarantee (crash loses only the in-flight article) is worth keeping, but the *sort* buys nothing at all — `seen` is a set, order is irrelevant to correctness, and it's only sorted for diff-friendliness in the JSON file. Fix:\n\n```python\n# sort once when writing out, not conceptually part of the hot path — or drop entirely\nstate[\"seen_urls\"] = list(seen)  # order doesn't matter for a set membership check\n```\n\nIf you want batched durability instead (bigger win, same crash-safety guarantee minus \"exactly one article\" precision): flush state every N articles (e.g. 20) instead of every 1, since `_append_article`'s JSONL append already persists the article data independently.\n\n### 4. Memory — unbounded accumulation for `--limit 0` runs\n\n**`base.py:284, 309`** — `crawl()` builds `saved: list[Article]` and appends every fetched `Article` (title, full body text, image URL list) for the entire run, even though each one is already flushed to disk via `_append_article`/`on_save`. For a full-archive backfill (`--limit 0` on a multi-thousand-article site) this holds the entire corpus's text in memory simultaneously for no reason — `main.py:25` only uses `len(articles)` at the end.\n\n```python\n# main.py:25\nprint(f\"got {len(articles)} new articles this run\", flush=True)\n```\n\nFix: track a counter instead of accumulating full objects, or only accumulate when the caller actually needs the list back:\n\n```python\ndef crawl(self, limit: int = 10, on_save=None) -> int:\n    ...\n    count = 0\n    ...\n    count += 1\n    if on_save:\n        on_save(article)\n    ...\n    return count\n```\n\n(If some caller genuinely needs the `Article` objects, keep the list but this repo's only consumer — `main.py` — doesn't.)\n\n### 5. Minor: sitemap frontier uses `list.pop(0)`\n\n**`base.py:70-72`**:\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift per pop\n```\n\nTrivial at ~118 sub-sitemaps (Midi's worst case), but free to fix — swap to `collections.deque` + `popleft()` for O(1).\n\n### Not applicable here\n- **React re-renders**: no frontend code in `apps/crawler` — it's a Python CLI. If you meant a different app in the monorepo (there's a new untracked `apps/cli/`), point me at it and I'll run the same pass there.\n- Classic DB N+1 (ORM lazy-loading in a loop): no ORM/DB here — the analogous pattern is the double-fetch in #1 and the per-article full-file rewrite in #3.\n\n### Priority order\n1. **#3** (state rewrite/sort) — biggest win, scales with corpus size, affects every provider.\n2. **#2** (double `get_all_text`) — free, zero-risk, halves body-parsing work per article.\n3. **#4** (memory) — matters only for large `--limit 0` runs, easy to fix.\n4. **#1** (Moov double-fetch) — real but scoped to one provider; the code already accepts this as a known tradeoff.\n5. **#5** — cosmetic.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Performance Analysis — `apps/crawler`",
+        "content": "\nThis is a Python CLI crawler (no database, no React) — file-backed JSONL + JSON state. I'm mapping your five categories onto what actually exists here: file I/O in place of DB queries, and no frontend to inspect.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. \"N+1\" pattern → redundant fetches",
+        "content": "\n**`providers.py:207-231` (`Moov.list_article_urls`)** — every URL is fetched **twice**: once in `list_article_urls()` to expand the link frontier, once again in `parse_article()` to extract the article. The code comment even flags this as a known \"ceiling.\" Fix: cache the already-fetched page and hand it to `parse_article`.\n\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "base.py",
+        "content": "def parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n",
+        "level": 1
+      },
+      {
+        "title": "providers.py — Moov.list_article_urls already has `page` in hand; base.crawl()",
+        "content": "",
+        "level": 1
+      },
+      {
+        "title": "would need a small hook to accept (url, page) pairs instead of bare urls for",
+        "content": "",
+        "level": 1
+      },
+      {
+        "title": "providers that pre-fetch. Minimal version: an LRU cache keyed by url in fetch().",
+        "content": "```\n\nIf threading a `page` object through is too invasive, a `functools.lru_cache`-style single-slot cache on `fetch()` (keyed by URL) removes the double network round-trip with almost no code change.\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Redundant computation — double text extraction per paragraph",
+        "content": "\n**`base.py:183-187`**:\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- called again here\n)\n```\n\n`get_all_text(strip=True)` walks/strips the DOM subtree — it's called **twice per paragraph** (once to filter, once to join). For a 40-paragraph article that's 80 extractions instead of 40, on every single article across every provider. Fix:\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Caching / I/O amplification — state file rewritten + re-sorted on every article",
+        "content": "\n**`base.py:302-315`** — inside the crawl loop, *every* saved article (and every skipped non-article URL) triggers:\n\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)     # O(n log n), n = total seen so far\nself._save_state(state)                # full JSON serialize + atomic rewrite of the whole file\n```\n\n`state/malagasynews-mbs.json` is already 164 KB / thousands of URLs. For an \"unlimited\" backfill (`--limit 0`), this means: sort a growing list from size *m* to *m+k*, and do a full-file write+rename, **once per article**, k times — i.e. this dominates wall-clock time on large sites more than the actual network fetch does. The atomicity guarantee (crash loses only the in-flight article) is worth keeping, but the *sort* buys nothing at all — `seen` is a set, order is irrelevant to correctness, and it's only sorted for diff-friendliness in the JSON file. Fix:\n\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "sort once when writing out, not conceptually part of the hot path — or drop entirely",
+        "content": "state[\"seen_urls\"] = list(seen)  # order doesn't matter for a set membership check\n```\n\nIf you want batched durability instead (bigger win, same crash-safety guarantee minus \"exactly one article\" precision): flush state every N articles (e.g. 20) instead of every 1, since `_append_article`'s JSONL append already persists the article data independently.\n\n",
+        "level": 1
+      },
+      {
+        "title": "4. Memory — unbounded accumulation for `--limit 0` runs",
+        "content": "\n**`base.py:284, 309`** — `crawl()` builds `saved: list[Article]` and appends every fetched `Article` (title, full body text, image URL list) for the entire run, even though each one is already flushed to disk via `_append_article`/`on_save`. For a full-archive backfill (`--limit 0` on a multi-thousand-article site) this holds the entire corpus's text in memory simultaneously for no reason — `main.py:25` only uses `len(articles)` at the end.\n\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "main.py:25",
+        "content": "print(f\"got {len(articles)} new articles this run\", flush=True)\n```\n\nFix: track a counter instead of accumulating full objects, or only accumulate when the caller actually needs the list back:\n\n```python\ndef crawl(self, limit: int = 10, on_save=None) -> int:\n    ...\n    count = 0\n    ...\n    count += 1\n    if on_save:\n        on_save(article)\n    ...\n    return count\n```\n\n(If some caller genuinely needs the `Article` objects, keep the list but this repo's only consumer — `main.py` — doesn't.)\n\n",
+        "level": 1
+      },
+      {
+        "title": "5. Minor: sitemap frontier uses `list.pop(0)`",
+        "content": "\n**`base.py:70-72`**:\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift per pop\n```\n\nTrivial at ~118 sub-sitemaps (Midi's worst case), but free to fix — swap to `collections.deque` + `popleft()` for O(1).\n\n",
+        "level": 3
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **React re-renders**: no frontend code in `apps/crawler` — it's a Python CLI. If you meant a different app in the monorepo (there's a new untracked `apps/cli/`), point me at it and I'll run the same pass there.\n- Classic DB N+1 (ORM lazy-loading in a loop): no ORM/DB here — the analogous pattern is the double-fetch in #1 and the per-article full-file rewrite in #3.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Priority order",
+        "content": "1. **#3** (state rewrite/sort) — biggest win, scales with corpus size, affects every provider.\n2. **#2** (double `get_all_text`) — free, zero-risk, halves body-parsing work per article.\n3. **#4** (memory) — matters only for large `--limit 0` runs, easy to fix.\n4. **#1** (Moov double-fetch) — real but scoped to one provider; the code already accepts this as a known tradeoff.\n5. **#5** — cosmetic.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "# base.py\ndef parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n# providers.py — Moov.list_article_urls already has `page` in hand; base.crawl()\n# would need a small hook to accept (url, page) pairs instead of bare urls for\n# providers that pre-fetch. Minimal version: an LRU cache keyed by url in fetch()."
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- called again here\n)"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    text\n    for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)"
+      },
+      {
+        "language": "python",
+        "code": "seen.add(url)\nstate[\"seen_urls\"] = sorted(seen)     # O(n log n), n = total seen so far\nself._save_state(state)                # full JSON serialize + atomic rewrite of the whole file"
+      },
+      {
+        "language": "python",
+        "code": "# sort once when writing out, not conceptually part of the hot path — or drop entirely\nstate[\"seen_urls\"] = list(seen)  # order doesn't matter for a set membership check"
+      },
+      {
+        "language": "python",
+        "code": "# main.py:25\nprint(f\"got {len(articles)} new articles this run\", flush=True)"
+      },
+      {
+        "language": "python",
+        "code": "def crawl(self, limit: int = 10, on_save=None) -> int:\n    ...\n    count = 0\n    ...\n    count += 1\n    if on_save:\n        on_save(article)\n    ...\n    return count"
+      },
+      {
+        "language": "python",
+        "code": "to_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift per pop"
+      }
+    ]
+  },
+  "durationMs": 184854,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:34:40.908Z",
+  "executionId": "optimize_1783967496054_ew48u9"
+}

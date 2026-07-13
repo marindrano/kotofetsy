@@ -1,0 +1,65 @@
+[2026-07-13T18:39:06.606Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "# Security Audit Report\n\n## Summary\n\nThe provided codebase is primarily third-party Playwright/Patchright CLI tooling from node_modules. No critical hardcoded secrets or direct SQL/XSS vulnerabilities were found. However, several **low-to-medium severity issues** related to file permissions and input validation were identified.\n\n## JSON Report\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 102,\n      \"description\": \"Socket path from config file not validated before connection - if config file is writable by attacker, could establish connections to arbitrary sockets\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 58,\n      \"description\": \"JSON config files parsed without schema validation - malicious JSON in session files could cause unexpected behavior or crashes\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 78,\n      \"description\": \"PWTEST_DAEMON_SESSION_DIR environment variable used without path sanitization - could allow path traversal if set by attacker\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/minimist.js\",\n      \"line\": 1,\n      \"description\": \"Custom minimist implementation for arg parsing - ensure version in package.json is recent (minimist <1.2.0 has known prototype pollution CVE-2021-44906)\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js\",\n      \"line\": 92,\n      \"description\": \"Hard-coded user home directory paths - if running in restricted environments, could expose sensitive data locations\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 94,\n      \"description\": \"Socket file cleanup on error uses unlink without error handling - timing window could allow symlink attacks on Unix systems\"\n    }\n  ],\n  \"riskScore\": 28,\n  \"recommendations\": [\n    \"✅ Validate socket paths from config files against whitelist before connecting\",\n    \"✅ Implement JSON schema validation for all session/config files before parsing\",\n    \"✅ Sanitize PWTEST_DAEMON_SESSION_DIR and other env var paths with path.resolve() + integrity checks\",\n    \"✅ Verify minimist package.json version >= 1.2.2 (fixes CVE-2021-44906)\",\n    \"✅ Use fs.rmSync() or add race condition protection when deleting socket files\",\n    \"✅ Store session/config files with restrictive permissions (0600 on Unix)\",\n    \"✅ Add input validation for all command-line arguments in program.js before passing to child processes\",\n    \"✅ No hardcoded secrets found ✓\",\n    \"✅ No direct SQL injection vectors found ✓\",\n    \"✅ No frontend XSS vectors found ✓\"\n  ]\n}\n```\n\n## Detailed Findings\n\n| Issue | Impact | Fix |\n|-------|--------|-----|\n| **Unvalidated socket paths** | Low (requires local access) | Whitelist allowed socket paths or validate against expected format |\n| **Unsafe JSON parsing** | Low (requires config file write) | Add schema validation with `joi` or `zod` |\n| **Env var path traversal** | Low (requires env var control) | Use `path.resolve()` and check against safe base directory |\n| **Minimist prototype pollution** | Medium (if outdated version) | Update to minimist ≥ 1.2.2 |\n| **File symlink race window** | Low (Unix-specific, local access) | Add atomic file operations or stat checks |\n\n**Note:** This audit analyzed distributed third-party code. For production security, audit your own application code separately from node_modules dependencies.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 102,
+        "description": "Socket path from config file not validated before connection - if config file is writable by attacker, could establish connections to arbitrary sockets"
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 58,
+        "description": "JSON config files parsed without schema validation - malicious JSON in session files could cause unexpected behavior or crashes"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 78,
+        "description": "PWTEST_DAEMON_SESSION_DIR environment variable used without path sanitization - could allow path traversal if set by attacker"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/minimist.js",
+        "line": 1,
+        "description": "Custom minimist implementation for arg parsing - ensure version in package.json is recent (minimist <1.2.0 has known prototype pollution CVE-2021-44906)"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js",
+        "line": 92,
+        "description": "Hard-coded user home directory paths - if running in restricted environments, could expose sensitive data locations"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 94,
+        "description": "Socket file cleanup on error uses unlink without error handling - timing window could allow symlink attacks on Unix systems"
+      }
+    ],
+    "riskScore": 28,
+    "recommendations": [
+      "✅ Validate socket paths from config files against whitelist before connecting",
+      "✅ Implement JSON schema validation for all session/config files before parsing",
+      "✅ Sanitize PWTEST_DAEMON_SESSION_DIR and other env var paths with path.resolve() + integrity checks",
+      "✅ Verify minimist package.json version >= 1.2.2 (fixes CVE-2021-44906)",
+      "✅ Use fs.rmSync() or add race condition protection when deleting socket files",
+      "✅ Store session/config files with restrictive permissions (0600 on Unix)",
+      "✅ Add input validation for all command-line arguments in program.js before passing to child processes",
+      "✅ No hardcoded secrets found ✓",
+      "✅ No direct SQL injection vectors found ✓",
+      "✅ No frontend XSS vectors found ✓"
+    ]
+  },
+  "durationMs": 34240,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:39:06.606Z",
+  "executionId": "audit_1783967912366_ugfryl"
+}

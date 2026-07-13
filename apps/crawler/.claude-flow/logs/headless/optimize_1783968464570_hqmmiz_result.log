@@ -1,0 +1,110 @@
+[2026-07-13T18:51:20.641Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "This is a Python web-scraping/crawler project (`base.py`, `providers.py`, `main.py`, `models.py`) — no database ORM and no React, so the literal \"N+1 query\" / \"React re-render\" categories don't apply. I mapped the same underlying failure modes (redundant round-trips, wasted recomputation, unbounded growth) onto what's actually here.\n\n## 1. Redundant computation — body text extracted twice per paragraph\n\n`base.py:183-187`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)\n)\n```\n`get_all_text(strip=True)` walks the DOM subtree and re-strips text — it's called **twice per paragraph** (once in the filter, once in the join). For long articles this doubles the CSS/text-extraction cost for no reason.\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for text in (p.get_all_text(strip=True) for p in page.css(s.body))\n    if text\n)\n```\n\n## 2. N+1-equivalent: full-state disk write on every single article\n\n`base.py:308-314` (inside the `crawl()` loop):\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n), every iteration\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                    # full JSON re-serialize + write + rename, every iteration\n```\nThis is the disk-I/O analogue of N+1: for a run of `n` new articles, you get `n` full `sorted()` passes over a set that keeps growing (O(n² log n) total) plus `n` full-file rewrites of the entire state (which also contains the growing `seen_urls` list — this gets worse for providers with large backlogs, e.g. Midi's ~118 sitemap files). It's deliberately resumable-by-design (checkpoint per article, per the docstring), so you don't want to remove the safety property — but you can keep resumability while cutting the redundant work:\n\n```python\n# seen_sorted is only needed for JSON serialization; keep it as a list and append instead of re-sorting\nseen_list = state.setdefault(\"seen_urls\", [])\n...\nseen_list.append(url)          # O(1) instead of O(n log n) sort every time\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)\n```\nDropping the `sorted()` (it's only there for readability of the JSON file, not correctness — the field is read back into a `set()` anyway at `base.py:283`) removes the quadratic term entirely.\n\n## 3. Redundant network fetch — Moov provider fetches every page twice\n\n`providers.py:224-236`, already self-documented in the comment above it:\n```python\n# ... each page is fetched twice (once here to expand the frontier, once in parse_article)\n```\n`list_article_urls()` fetches a page to discover outgoing `/article/` links, then `crawl()` calls `parse_article(url)` which fetches the *same URL again* to extract title/body/etc. That's a literal duplicate HTTP request per article.\n\n**Fix**: cache the already-fetched page and let `parse_article` reuse it instead of re-fetching:\n```python\ndef list_article_urls(self):\n    queued: set[str] = set()\n    queue: deque[str] = deque()\n    self._page_cache: dict[str, object] = {}   # url -> fetched page\n\n    def enqueue(href):\n        ...\n\n    home = Fetcher.get(self._seed_url, headers={\"User-Agent\": USER_AGENT})\n    for link in home.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n\n    while queue:\n        url = queue.popleft()\n        yield url\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # reuse in parse_article\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n# override fetch() to check the cache first\ndef fetch(self, url):\n    cached = self._page_cache.pop(url, None)\n    return cached if cached is not None else super().fetch(url)\n```\nThis halves Moov's HTTP traffic.\n\n## 4. Caching opportunity — FreeNews already has the content, fetches it again\n\n`providers.py:171-191`, also self-documented:\n```python\n# We ask only for `link` and still fetch each article page in parse_article (uniform\n# with other providers); ponytail ceiling: the API already carries content.rendered —\n# consume it directly if the extra per-article fetch ever becomes a problem.\n```\nThe WordPress REST API response already contains `content.rendered` (and `title.rendered`, `date`, etc.) — the code discards that and does a full extra page fetch per article just to re-parse the same content out of HTML. Requesting `_fields=link,title,content,date` and building the `Article` directly from the API response would eliminate ~3200 redundant page fetches for this provider entirely. This is the closest thing in the codebase to a genuine N+1 pattern (1 cheap list call + N expensive per-item fetches where the data was already available in the list call).\n\n## 5. Unbounded growth (not a leak, but worth flagging)\n\n`seen_urls` is loaded fully into memory and re-serialized to a single JSON file in full on every save (`base.py:138-149`). For `--limit 0` (unlimited) runs against large archives, this file — and the in-memory list — grows without bound and every write becomes more expensive than the last. Not a leak (nothing is unreferenced), but the current \"one big JSON array\" design doesn't scale past a few tens of thousands of URLs. If any provider's backlog gets that large, moving `seen_urls` to a flat append-only file (one URL per line, like `_append_article` already does for articles) or a small SQLite index would turn each checkpoint into an O(1) append instead of an O(n) rewrite.\n\n## 6. Resource lifecycle — `StealthyFetcher` per article (worth verifying)\n\n`base.py:162-165`:\n```python\ndef fetch(self, url: str):\n    if self.needs_stealth:\n        return StealthyFetcher.fetch(url)\n    return Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n```\n`needs_stealth=True` (Midi) implies a headless-browser-backed fetch (Scrapling's `StealthyFetcher` wraps Playwright/Camoufox). If it spins up a fresh browser/context per call rather than reusing one across the crawl, that's a significant per-article overhead and potential process/memory buildup over a long run. I didn't confirm this from Scrapling's internals (couldn't inspect the installed package in this sandbox) — worth checking whether `StealthyFetcher` exposes a persistent-session mode, since Midi is the one provider using it and it has the largest sitemap (~118 sub-files).\n\n---\n\n**Priority order**: #2 (state write) and #1 (double text extraction) are free wins with no behavior change. #3 and #4 cut real network load in half or more for their providers. #5/#6 only matter once a provider's backlog or run length grows significantly — flag but don't over-invest unless that's actually happening.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. Redundant computation — body text extracted twice per paragraph",
+        "content": "\n`base.py:183-187`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)\n)\n```\n`get_all_text(strip=True)` walks the DOM subtree and re-strips text — it's called **twice per paragraph** (once in the filter, once in the join). For long articles this doubles the CSS/text-extraction cost for no reason.\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for text in (p.get_all_text(strip=True) for p in page.css(s.body))\n    if text\n)\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "2. N+1-equivalent: full-state disk write on every single article",
+        "content": "\n`base.py:308-314` (inside the `crawl()` loop):\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n), every iteration\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                    # full JSON re-serialize + write + rename, every iteration\n```\nThis is the disk-I/O analogue of N+1: for a run of `n` new articles, you get `n` full `sorted()` passes over a set that keeps growing (O(n² log n) total) plus `n` full-file rewrites of the entire state (which also contains the growing `seen_urls` list — this gets worse for providers with large backlogs, e.g. Midi's ~118 sitemap files). It's deliberately resumable-by-design (checkpoint per article, per the docstring), so you don't want to remove the safety property — but you can keep resumability while cutting the redundant work:\n\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "seen_sorted is only needed for JSON serialization; keep it as a list and append instead of re-sorting",
+        "content": "seen_list = state.setdefault(\"seen_urls\", [])\n...\nseen_list.append(url)          # O(1) instead of O(n log n) sort every time\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)\n```\nDropping the `sorted()` (it's only there for readability of the JSON file, not correctness — the field is read back into a `set()` anyway at `base.py:283`) removes the quadratic term entirely.\n\n",
+        "level": 1
+      },
+      {
+        "title": "3. Redundant network fetch — Moov provider fetches every page twice",
+        "content": "\n`providers.py:224-236`, already self-documented in the comment above it:\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "... each page is fetched twice (once here to expand the frontier, once in parse_article)",
+        "content": "```\n`list_article_urls()` fetches a page to discover outgoing `/article/` links, then `crawl()` calls `parse_article(url)` which fetches the *same URL again* to extract title/body/etc. That's a literal duplicate HTTP request per article.\n\n**Fix**: cache the already-fetched page and let `parse_article` reuse it instead of re-fetching:\n```python\ndef list_article_urls(self):\n    queued: set[str] = set()\n    queue: deque[str] = deque()\n    self._page_cache: dict[str, object] = {}   # url -> fetched page\n\n    def enqueue(href):\n        ...\n\n    home = Fetcher.get(self._seed_url, headers={\"User-Agent\": USER_AGENT})\n    for link in home.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n\n    while queue:\n        url = queue.popleft()\n        yield url\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # reuse in parse_article\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n",
+        "level": 1
+      },
+      {
+        "title": "override fetch() to check the cache first",
+        "content": "def fetch(self, url):\n    cached = self._page_cache.pop(url, None)\n    return cached if cached is not None else super().fetch(url)\n```\nThis halves Moov's HTTP traffic.\n\n",
+        "level": 1
+      },
+      {
+        "title": "4. Caching opportunity — FreeNews already has the content, fetches it again",
+        "content": "\n`providers.py:171-191`, also self-documented:\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "We ask only for `link` and still fetch each article page in parse_article (uniform",
+        "content": "",
+        "level": 1
+      },
+      {
+        "title": "with other providers); ponytail ceiling: the API already carries content.rendered —",
+        "content": "",
+        "level": 1
+      },
+      {
+        "title": "consume it directly if the extra per-article fetch ever becomes a problem.",
+        "content": "```\nThe WordPress REST API response already contains `content.rendered` (and `title.rendered`, `date`, etc.) — the code discards that and does a full extra page fetch per article just to re-parse the same content out of HTML. Requesting `_fields=link,title,content,date` and building the `Article` directly from the API response would eliminate ~3200 redundant page fetches for this provider entirely. This is the closest thing in the codebase to a genuine N+1 pattern (1 cheap list call + N expensive per-item fetches where the data was already available in the list call).\n\n",
+        "level": 1
+      },
+      {
+        "title": "5. Unbounded growth (not a leak, but worth flagging)",
+        "content": "\n`seen_urls` is loaded fully into memory and re-serialized to a single JSON file in full on every save (`base.py:138-149`). For `--limit 0` (unlimited) runs against large archives, this file — and the in-memory list — grows without bound and every write becomes more expensive than the last. Not a leak (nothing is unreferenced), but the current \"one big JSON array\" design doesn't scale past a few tens of thousands of URLs. If any provider's backlog gets that large, moving `seen_urls` to a flat append-only file (one URL per line, like `_append_article` already does for articles) or a small SQLite index would turn each checkpoint into an O(1) append instead of an O(n) rewrite.\n\n",
+        "level": 2
+      },
+      {
+        "title": "6. Resource lifecycle — `StealthyFetcher` per article (worth verifying)",
+        "content": "`base.py:162-165`:\n```python\ndef fetch(self, url: str):\n    if self.needs_stealth:\n        return StealthyFetcher.fetch(url)\n    return Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n```\n`needs_stealth=True` (Midi) implies a headless-browser-backed fetch (Scrapling's `StealthyFetcher` wraps Playwright/Camoufox). If it spins up a fresh browser/context per call rather than reusing one across the crawl, that's a significant per-article overhead and potential process/memory buildup over a long run. I didn't confirm this from Scrapling's internals (couldn't inspect the installed package in this sandbox) — worth checking whether `StealthyFetcher` exposes a persistent-session mode, since Midi is the one provider using it and it has the largest sitemap (~118 sub-files).\n\n---\n\n**Priority order**: #2 (state write) and #1 (double text extraction) are free wins with no behavior change. #3 and #4 cut real network load in half or more for their providers. #5/#6 only matter once a provider's backlog or run length grows significantly — flag but don't over-invest unless that's actually happening.",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)\n)"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    text\n    for text in (p.get_all_text(strip=True) for p in page.css(s.body))\n    if text\n)"
+      },
+      {
+        "language": "python",
+        "code": "seen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n), every iteration\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                    # full JSON re-serialize + write + rename, every iteration"
+      },
+      {
+        "language": "python",
+        "code": "# seen_sorted is only needed for JSON serialization; keep it as a list and append instead of re-sorting\nseen_list = state.setdefault(\"seen_urls\", [])\n...\nseen_list.append(url)          # O(1) instead of O(n log n) sort every time\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)"
+      },
+      {
+        "language": "python",
+        "code": "# ... each page is fetched twice (once here to expand the frontier, once in parse_article)"
+      },
+      {
+        "language": "python",
+        "code": "def list_article_urls(self):\n    queued: set[str] = set()\n    queue: deque[str] = deque()\n    self._page_cache: dict[str, object] = {}   # url -> fetched page\n\n    def enqueue(href):\n        ...\n\n    home = Fetcher.get(self._seed_url, headers={\"User-Agent\": USER_AGENT})\n    for link in home.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n\n    while queue:\n        url = queue.popleft()\n        yield url\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # reuse in parse_article\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n# override fetch() to check the cache first\ndef fetch(self, url):\n    cached = self._page_cache.pop(url, None)\n    return cached if cached is not None else super().fetch(url)"
+      },
+      {
+        "language": "python",
+        "code": "# We ask only for `link` and still fetch each article page in parse_article (uniform\n# with other providers); ponytail ceiling: the API already carries content.rendered —\n# consume it directly if the extra per-article fetch ever becomes a problem."
+      },
+      {
+        "language": "python",
+        "code": "def fetch(self, url: str):\n    if self.needs_stealth:\n        return StealthyFetcher.fetch(url)\n    return Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})"
+      }
+    ]
+  },
+  "durationMs": 216071,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:51:20.641Z",
+  "executionId": "optimize_1783968464570_hqmmiz"
+}

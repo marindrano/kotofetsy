@@ -1,0 +1,63 @@
+[2026-07-13T18:03:57.908Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the codebase, here's the security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 36,\n      \"description\": \"User-controllable crawler directory path: The -crawler-dir flag accepts user input without validation. An attacker could point to a directory containing malicious scripts that get executed with the application's privileges.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 42,\n      \"description\": \"Unvalidated provider names in headless mode: The -providers flag accepts arbitrary comma-separated values without validating against the hardcoded providers list. While exec.Command properly escapes arguments (preventing shell injection), passing unexpected values could cause unintended behavior.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 60,\n      \"description\": \"External command dependency without validation: The application calls 'uv' (Python package manager) without verifying it exists or is from a trusted source. PATH manipulation could lead to execution of unintended binaries.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 66,\n      \"description\": \"Stderr mixed with stdout: Redirecting stderr to stdout (cmd.Stderr = cmd.Stdout) could lead to confusion between normal output and error messages. Malicious Python scripts could inject control characters in error output.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 84,\n      \"description\": \"Unhandled goroutine errors in headless mode: Error messages are printed but not properly logged or validated. No rate limiting on concurrent processes.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"tui.go\",\n      \"line\": 186,\n      \"description\": \"Input parsing without upper bounds check: While the limit is checked for negative values, there's no upper bound validation. Extremely large values could cause memory/resource exhaustion.\"\n    }\n  ],\n  \"riskScore\": 28,\n  \"recommendations\": [\n    \"Validate crawler-dir path: Use filepath.Abs() and filepath.Clean(), then verify the path is within an expected directory tree\",\n    \"Whitelist provider names: In headless mode, validate that all provider names are in the hardcoded providers list before passing them to the crawler\",\n    \"Use absolute path for external commands: Resolve the 'uv' command via exec.LookPath() to ensure the correct binary is executed\",\n    \"Separate stderr from stdout: Keep stderr and stdout separate; only merge if explicitly needed for UX\",\n    \"Add upper bounds to user input: Enforce a maximum limit value (e.g., 1000) to prevent resource exhaustion\",\n    \"Add subprocess timeout: Implement context.WithTimeout() to prevent hanging crawler processes\",\n    \"Validate crawler output: Implement basic sanitization of crawler output before displaying in the TUI\",\n    \"Document security model: Add comments explaining which inputs are trusted (hardcoded providers list) vs untrusted (CLI flags)\"\n  ]\n}\n```\n\n## Summary\n\n**Risk Score: 28/100** (Low-to-Medium Risk)\n\n**Key Findings:**\n- **No SQL injection, XSS, or hardcoded secrets** detected\n- **No known vulnerable dependencies** in go.mod (all dependencies are well-maintained charmbracelet UI libraries)\n- **Main concerns** are:\n  1. User-controlled directory paths used for command execution\n  2. Unvalidated provider names in headless mode\n  3. Lack of input validation on numeric bounds\n  4. External command dependency without verification\n\n**Immediate Actions:**\n1. Add whitelist validation for provider names in headless mode\n2. Validate and constrain the `crawler-dir` parameter\n3. Add input bounds checking for the limit parameter\n4. Add subprocess timeouts to prevent resource exhaustion\n\nThe application is relatively secure due to Go's safe handling of subprocess arguments (no shell interpretation), but would benefit from stricter input validation and path constraints.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 36,
+        "description": "User-controllable crawler directory path: The -crawler-dir flag accepts user input without validation. An attacker could point to a directory containing malicious scripts that get executed with the application's privileges."
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 42,
+        "description": "Unvalidated provider names in headless mode: The -providers flag accepts arbitrary comma-separated values without validating against the hardcoded providers list. While exec.Command properly escapes arguments (preventing shell injection), passing unexpected values could cause unintended behavior."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 60,
+        "description": "External command dependency without validation: The application calls 'uv' (Python package manager) without verifying it exists or is from a trusted source. PATH manipulation could lead to execution of unintended binaries."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 66,
+        "description": "Stderr mixed with stdout: Redirecting stderr to stdout (cmd.Stderr = cmd.Stdout) could lead to confusion between normal output and error messages. Malicious Python scripts could inject control characters in error output."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 84,
+        "description": "Unhandled goroutine errors in headless mode: Error messages are printed but not properly logged or validated. No rate limiting on concurrent processes."
+      },
+      {
+        "severity": "low",
+        "file": "tui.go",
+        "line": 186,
+        "description": "Input parsing without upper bounds check: While the limit is checked for negative values, there's no upper bound validation. Extremely large values could cause memory/resource exhaustion."
+      }
+    ],
+    "riskScore": 28,
+    "recommendations": [
+      "Validate crawler-dir path: Use filepath.Abs() and filepath.Clean(), then verify the path is within an expected directory tree",
+      "Whitelist provider names: In headless mode, validate that all provider names are in the hardcoded providers list before passing them to the crawler",
+      "Use absolute path for external commands: Resolve the 'uv' command via exec.LookPath() to ensure the correct binary is executed",
+      "Separate stderr from stdout: Keep stderr and stdout separate; only merge if explicitly needed for UX",
+      "Add upper bounds to user input: Enforce a maximum limit value (e.g., 1000) to prevent resource exhaustion",
+      "Add subprocess timeout: Implement context.WithTimeout() to prevent hanging crawler processes",
+      "Validate crawler output: Implement basic sanitization of crawler output before displaying in the TUI",
+      "Document security model: Add comments explaining which inputs are trusted (hardcoded providers list) vs untrusted (CLI flags)"
+    ]
+  },
+  "durationMs": 58627,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:03:57.908Z",
+  "executionId": "audit_1783965779281_n00kc4"
+}

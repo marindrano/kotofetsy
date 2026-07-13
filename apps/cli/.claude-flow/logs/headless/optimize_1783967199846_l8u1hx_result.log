@@ -1,0 +1,85 @@
+[2026-07-13T18:32:19.559Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Scope\n\nThe sandbox for this session is locked to `apps/cli`, so this analysis covers the Go TUI (`main.go` + `tui.go`, ~500 lines total) — there's no React, no database, and no ORM in this app, so those specific categories don't apply literally. I mapped each requested category to its actual Go equivalent and found one genuine algorithmic issue plus a few real robustness/resource gaps. (The Python crawler in `apps/crawler` is outside this sandbox — say the word and I'll request access to review it too, since your `git status` shows heavy recent changes there.)\n\n## 1. Redundant computation — the \"N+1\" equivalent here\n\n`viewRunning()` re-derives every provider's article count **from scratch, on every single render**, by rescanning that provider's entire log history:\n\n```go\n// tui.go:396-399\ncount := articlesSaved(st.lines)   // O(len(lines)) — rescans full history\n```\n\n`View()` runs after *every* `Update()`, and `Update()` fires for every `statusMsg` from any provider (`tui.go:107-114`). So for N providers each emitting L lines, total render work is O(N·L) per message × L messages ≈ **O(L²)** over a run — the exact shape of an N+1 problem, just against an in-memory slice instead of a DB.\n\n**Fix — maintain a running counter instead of rescanning:**\n\n```go\ntype providerStatus struct {\n\tstate providerState\n\tlines []string\n\tcount int // incremented as lines arrive, replaces articlesSaved()\n}\n\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.count++\n\t}\n\t...\n```\n\nThen in `viewRunning`, replace `count := articlesSaved(st.lines)` with `count := st.count`. `articlesSaved` and its full-slice scan can be deleted entirely.\n\n## 2. Unbounded memory growth\n\n`st.lines` accumulates every stdout line forever (`tui.go:110`), and with `--limit 0` (\"run until exhausted\") a chatty provider can produce an unbounded log. It's reachable (not a true leak), but nothing caps it — worth ring-buffering to the last N lines actually shown, since the viewport only ever displays a fixed window:\n\n```go\nconst maxLogLines = 2000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLogLines {\n\tst.lines = st.lines[len(st.lines)-maxLogLines:]\n}\n```\n\n## 3. No cancellation — a stuck subprocess hangs the whole TUI\n\n`runCrawler` (`main.go:59-78`) calls `exec.Command` with no `context.Context` or timeout. Combined with the deliberate guard in `handleKey`:\n\n```go\n// tui.go:146-150\ncase \"ctrl+c\", \"q\":\n\tif m.screen != screenRunning || m.pending == 0 {\n\t\treturn m, tea.Quit\n\t}\n\treturn m, nil // can't quit while anything is still pending\n```\n\n...if the Python `uv run main.py` process for one provider ever hangs (network stall, scrapling browser wedge), `m.pending` never reaches 0 and the user has **no way to quit** — not ctrl+c, not q. This is the actual \"memory/resource leak\" risk in this codebase: an indefinitely blocked goroutine + OS process with no way to reap it from the UI.\n\n**Fix:** use `exec.CommandContext` and let ctrl+c cancel all in-flight runs instead of being a no-op:\n\n```go\nfunc runCrawler(ctx context.Context, name string, limit int, crawlerDir string, onLine func(string)) error {\n\tcmd := exec.CommandContext(ctx, \"uv\", \"run\", \"main.py\", name, \"--limit\", fmt.Sprint(limit))\n\t...\n}\n```\n\nStore a `cancel context.CancelFunc` on the model, call it on ctrl+c even while `pending > 0`, and let `q` alone keep the current \"wait for completion\" behavior.\n\n## 4. Unbounded concurrency in headless mode\n\n`runHeadless` (`main.go:80-95`) spawns one goroutine + one `uv run` subprocess **per provider simultaneously**, with no cap:\n\n```go\nfor _, name := range names {\n\twg.Add(1)\n\tgo func(name string) { ... }(name)\n}\n```\n\nFor 11 providers today this is fine, but each is a full Python interpreter potentially driving browser automation (scrapling) — a real resource spike, and it doesn't scale as providers grow. A worker-pool with a bounded semaphore avoids an unbounded fan-out:\n\n```go\nsem := make(chan struct{}, 4) // cap concurrent crawls\nfor _, name := range names {\n\twg.Add(1)\n\tgo func(name string) {\n\t\tdefer wg.Done()\n\t\tsem <- struct{}{}\n\t\tdefer func() { <-sem }()\n\t\t...\n\t}(name)\n}\n```\n\n## 5. `bufio.Scanner` silent truncation\n\n`runCrawler`'s scanner uses the default 64KB max token size (`main.go:72-75`). If any provider ever emits a single line longer than that (e.g. a raw JSON dump on error), `scanner.Scan()` returns `false` with `bufio.ErrTooLong` and **the rest of that provider's output is silently dropped** — no error surfaced to the UI. Worth widening the buffer and checking `scanner.Err()`:\n\n```go\nscanner := bufio.NewScanner(stdout)\nscanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // allow up to 1MB lines\nfor scanner.Scan() {\n\tonLine(scanner.Text())\n}\nif err := scanner.Err(); err != nil {\n\tonLine(\"scanner error: \" + err.Error())\n}\n```\n\n## Not applicable here\n\n- **N+1 queries / caching**: no DB or ORM in this app — the closest analogue is finding #1 above.\n- **React re-renders**: no React — Bubble Tea's `Update`/`View` loop is the equivalent render cycle, and finding #1 is the direct parallel (recomputing derived state on every render instead of updating it incrementally).\n\n**Priority**: fix #1 first (it's a real, quantifiable algorithmic regression as runs get long), then #3 (correctness/usability — a hung crawl currently locks the whole TUI with no escape).\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Scope",
+        "content": "\nThe sandbox for this session is locked to `apps/cli`, so this analysis covers the Go TUI (`main.go` + `tui.go`, ~500 lines total) — there's no React, no database, and no ORM in this app, so those specific categories don't apply literally. I mapped each requested category to its actual Go equivalent and found one genuine algorithmic issue plus a few real robustness/resource gaps. (The Python crawler in `apps/crawler` is outside this sandbox — say the word and I'll request access to review it too, since your `git status` shows heavy recent changes there.)\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. Redundant computation — the \"N+1\" equivalent here",
+        "content": "\n`viewRunning()` re-derives every provider's article count **from scratch, on every single render**, by rescanning that provider's entire log history:\n\n```go\n// tui.go:396-399\ncount := articlesSaved(st.lines)   // O(len(lines)) — rescans full history\n```\n\n`View()` runs after *every* `Update()`, and `Update()` fires for every `statusMsg` from any provider (`tui.go:107-114`). So for N providers each emitting L lines, total render work is O(N·L) per message × L messages ≈ **O(L²)** over a run — the exact shape of an N+1 problem, just against an in-memory slice instead of a DB.\n\n**Fix — maintain a running counter instead of rescanning:**\n\n```go\ntype providerStatus struct {\n\tstate providerState\n\tlines []string\n\tcount int // incremented as lines arrive, replaces articlesSaved()\n}\n\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.count++\n\t}\n\t...\n```\n\nThen in `viewRunning`, replace `count := articlesSaved(st.lines)` with `count := st.count`. `articlesSaved` and its full-slice scan can be deleted entirely.\n\n",
+        "level": 2
+      },
+      {
+        "title": "2. Unbounded memory growth",
+        "content": "\n`st.lines` accumulates every stdout line forever (`tui.go:110`), and with `--limit 0` (\"run until exhausted\") a chatty provider can produce an unbounded log. It's reachable (not a true leak), but nothing caps it — worth ring-buffering to the last N lines actually shown, since the viewport only ever displays a fixed window:\n\n```go\nconst maxLogLines = 2000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLogLines {\n\tst.lines = st.lines[len(st.lines)-maxLogLines:]\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "3. No cancellation — a stuck subprocess hangs the whole TUI",
+        "content": "\n`runCrawler` (`main.go:59-78`) calls `exec.Command` with no `context.Context` or timeout. Combined with the deliberate guard in `handleKey`:\n\n```go\n// tui.go:146-150\ncase \"ctrl+c\", \"q\":\n\tif m.screen != screenRunning || m.pending == 0 {\n\t\treturn m, tea.Quit\n\t}\n\treturn m, nil // can't quit while anything is still pending\n```\n\n...if the Python `uv run main.py` process for one provider ever hangs (network stall, scrapling browser wedge), `m.pending` never reaches 0 and the user has **no way to quit** — not ctrl+c, not q. This is the actual \"memory/resource leak\" risk in this codebase: an indefinitely blocked goroutine + OS process with no way to reap it from the UI.\n\n**Fix:** use `exec.CommandContext` and let ctrl+c cancel all in-flight runs instead of being a no-op:\n\n```go\nfunc runCrawler(ctx context.Context, name string, limit int, crawlerDir string, onLine func(string)) error {\n\tcmd := exec.CommandContext(ctx, \"uv\", \"run\", \"main.py\", name, \"--limit\", fmt.Sprint(limit))\n\t...\n}\n```\n\nStore a `cancel context.CancelFunc` on the model, call it on ctrl+c even while `pending > 0`, and let `q` alone keep the current \"wait for completion\" behavior.\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. Unbounded concurrency in headless mode",
+        "content": "\n`runHeadless` (`main.go:80-95`) spawns one goroutine + one `uv run` subprocess **per provider simultaneously**, with no cap:\n\n```go\nfor _, name := range names {\n\twg.Add(1)\n\tgo func(name string) { ... }(name)\n}\n```\n\nFor 11 providers today this is fine, but each is a full Python interpreter potentially driving browser automation (scrapling) — a real resource spike, and it doesn't scale as providers grow. A worker-pool with a bounded semaphore avoids an unbounded fan-out:\n\n```go\nsem := make(chan struct{}, 4) // cap concurrent crawls\nfor _, name := range names {\n\twg.Add(1)\n\tgo func(name string) {\n\t\tdefer wg.Done()\n\t\tsem <- struct{}{}\n\t\tdefer func() { <-sem }()\n\t\t...\n\t}(name)\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. `bufio.Scanner` silent truncation",
+        "content": "\n`runCrawler`'s scanner uses the default 64KB max token size (`main.go:72-75`). If any provider ever emits a single line longer than that (e.g. a raw JSON dump on error), `scanner.Scan()` returns `false` with `bufio.ErrTooLong` and **the rest of that provider's output is silently dropped** — no error surfaced to the UI. Worth widening the buffer and checking `scanner.Err()`:\n\n```go\nscanner := bufio.NewScanner(stdout)\nscanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // allow up to 1MB lines\nfor scanner.Scan() {\n\tonLine(scanner.Text())\n}\nif err := scanner.Err(); err != nil {\n\tonLine(\"scanner error: \" + err.Error())\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **N+1 queries / caching**: no DB or ORM in this app — the closest analogue is finding #1 above.\n- **React re-renders**: no React — Bubble Tea's `Update`/`View` loop is the equivalent render cycle, and finding #1 is the direct parallel (recomputing derived state on every render instead of updating it incrementally).\n\n**Priority**: fix #1 first (it's a real, quantifiable algorithmic regression as runs get long), then #3 (correctness/usability — a hung crawl currently locks the whole TUI with no escape).",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "// tui.go:396-399\ncount := articlesSaved(st.lines)   // O(len(lines)) — rescans full history"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate providerState\n\tlines []string\n\tcount int // incremented as lines arrive, replaces articlesSaved()\n}\n\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.count++\n\t}\n\t..."
+      },
+      {
+        "language": "go",
+        "code": "const maxLogLines = 2000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLogLines {\n\tst.lines = st.lines[len(st.lines)-maxLogLines:]\n}"
+      },
+      {
+        "language": "go",
+        "code": "// tui.go:146-150\ncase \"ctrl+c\", \"q\":\n\tif m.screen != screenRunning || m.pending == 0 {\n\t\treturn m, tea.Quit\n\t}\n\treturn m, nil // can't quit while anything is still pending"
+      },
+      {
+        "language": "go",
+        "code": "func runCrawler(ctx context.Context, name string, limit int, crawlerDir string, onLine func(string)) error {\n\tcmd := exec.CommandContext(ctx, \"uv\", \"run\", \"main.py\", name, \"--limit\", fmt.Sprint(limit))\n\t...\n}"
+      },
+      {
+        "language": "go",
+        "code": "for _, name := range names {\n\twg.Add(1)\n\tgo func(name string) { ... }(name)\n}"
+      },
+      {
+        "language": "go",
+        "code": "sem := make(chan struct{}, 4) // cap concurrent crawls\nfor _, name := range names {\n\twg.Add(1)\n\tgo func(name string) {\n\t\tdefer wg.Done()\n\t\tsem <- struct{}{}\n\t\tdefer func() { <-sem }()\n\t\t...\n\t}(name)\n}"
+      },
+      {
+        "language": "go",
+        "code": "scanner := bufio.NewScanner(stdout)\nscanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // allow up to 1MB lines\nfor scanner.Scan() {\n\tonLine(scanner.Text())\n}\nif err := scanner.Err(); err != nil {\n\tonLine(\"scanner error: \" + err.Error())\n}"
+      }
+    ]
+  },
+  "durationMs": 339713,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:32:19.559Z",
+  "executionId": "optimize_1783967199846_l8u1hx"
+}

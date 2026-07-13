@@ -1,0 +1,70 @@
+[2026-07-13T18:25:23.873Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "# Security Vulnerability Analysis Report\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 45,\n      \"description\": \"Potential command injection via spawned child process. Session name and CLI arguments are passed to child_process.spawn without proper sanitization. An attacker controlling session names or arguments could inject arbitrary commands.\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 78,\n      \"description\": \"Path traversal vulnerability: Session names are used directly in file path construction without validation. Malicious session names (e.g., '../../../etc/passwd') could access arbitrary files.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 120,\n      \"description\": \"Insecure socket authentication: Unix domain socket communication lacks message authentication or signing. No verification that messages come from authorized clients. Could allow privilege escalation or session hijacking.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js\",\n      \"line\": 12,\n      \"description\": \"Environment variable controls instrumentation behavior (PW_INSTRUMENT_MODULES). If environment variables can be controlled by attackers, this enables arbitrary code instrumentation and execution.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js\",\n      \"line\": 85,\n      \"description\": \"Insufficient argument validation before use. Arguments parsed by minimist are used to construct commands and file paths without type checking or whitelist validation.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 110,\n      \"description\": \"Weak file permissions on daemon directories. Session files created without explicit mode specification (using default umask). Sensitive session data could be readable by other users.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 65,\n      \"description\": \"Error handling exposes system paths: Error messages may reveal full filesystem paths to users, aiding reconnaissance attacks.\"\n    }\n  ],\n  \"riskScore\": 68,\n  \"recommendations\": [\n    \"**Implement strict session name validation**: Use allowlist for session names (alphanumeric + underscore/hyphen only). Reject any session name with path separators or special characters.\",\n    \"**Use array-based child process spawning**: Replace string-based command construction with array arguments to child_process.spawn() to prevent injection attacks.\",\n    \"**Add socket message authentication**: Implement HMAC-SHA256 signing for all socket messages using a shared secret. Verify signatures before processing commands.\",\n    \"**Restrict daemon directory permissions**: Create daemon directories with mode 0700 (user-only access) using fs.mkdir(path, {mode: 0o700}). Ensure session files have mode 0600.\",\n    \"**Validate all CLI arguments**: Implement schema validation (e.g., joi or zod) for all CLI arguments before using them in file paths or process spawning.\",\n    \"**Disable environment-based instrumentation in production**: Remove or restrict PW_INSTRUMENT_MODULES functionality. Use configuration files in protected directories instead.\",\n    \"**Sanitize error messages**: Remove filesystem paths from error messages shown to users. Log full details server-side only.\",\n    \"**Implement process-level isolation**: Run daemon processes with minimum required privileges. Consider sandboxing with AppArmor or seccomp.\",\n    \"**Add audit logging**: Log all session creation, connection, and command execution for security monitoring and incident response.\"\n  ]\n}\n```\n\n## Key Findings Summary\n\nThis codebase shows **moderate security risks** (68/100 risk score). The primary concerns are:\n\n1. **Command Injection**: Session spawning doesn't use array-based arguments, creating injection vectors\n2. **Path Traversal**: Session names flow directly into file paths without sanitization  \n3. **Weak Inter-Process Communication**: Socket-based daemon communication lacks cryptographic authentication\n4. **Insufficient Input Validation**: CLI arguments bypass type/format checks before use\n\nThe code appears to be from Playwright's testing automation framework, which runs in development environments. However, if used in shared systems or with untrusted input, these vulnerabilities could be exploited for local privilege escalation or unauthorized access to browser sessions.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 45,
+        "description": "Potential command injection via spawned child process. Session name and CLI arguments are passed to child_process.spawn without proper sanitization. An attacker controlling session names or arguments could inject arbitrary commands."
+      },
+      {
+        "severity": "high",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 78,
+        "description": "Path traversal vulnerability: Session names are used directly in file path construction without validation. Malicious session names (e.g., '../../../etc/passwd') could access arbitrary files."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 120,
+        "description": "Insecure socket authentication: Unix domain socket communication lacks message authentication or signing. No verification that messages come from authorized clients. Could allow privilege escalation or session hijacking."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js",
+        "line": 12,
+        "description": "Environment variable controls instrumentation behavior (PW_INSTRUMENT_MODULES). If environment variables can be controlled by attackers, this enables arbitrary code instrumentation and execution."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js",
+        "line": 85,
+        "description": "Insufficient argument validation before use. Arguments parsed by minimist are used to construct commands and file paths without type checking or whitelist validation."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 110,
+        "description": "Weak file permissions on daemon directories. Session files created without explicit mode specification (using default umask). Sensitive session data could be readable by other users."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 65,
+        "description": "Error handling exposes system paths: Error messages may reveal full filesystem paths to users, aiding reconnaissance attacks."
+      }
+    ],
+    "riskScore": 68,
+    "recommendations": [
+      "**Implement strict session name validation**: Use allowlist for session names (alphanumeric + underscore/hyphen only). Reject any session name with path separators or special characters.",
+      "**Use array-based child process spawning**: Replace string-based command construction with array arguments to child_process.spawn() to prevent injection attacks.",
+      "**Add socket message authentication**: Implement HMAC-SHA256 signing for all socket messages using a shared secret. Verify signatures before processing commands.",
+      "**Restrict daemon directory permissions**: Create daemon directories with mode 0700 (user-only access) using fs.mkdir(path, {mode: 0o700}). Ensure session files have mode 0600.",
+      "**Validate all CLI arguments**: Implement schema validation (e.g., joi or zod) for all CLI arguments before using them in file paths or process spawning.",
+      "**Disable environment-based instrumentation in production**: Remove or restrict PW_INSTRUMENT_MODULES functionality. Use configuration files in protected directories instead.",
+      "**Sanitize error messages**: Remove filesystem paths from error messages shown to users. Log full details server-side only.",
+      "**Implement process-level isolation**: Run daemon processes with minimum required privileges. Consider sandboxing with AppArmor or seccomp.",
+      "**Add audit logging**: Log all session creation, connection, and command execution for security monitoring and incident response."
+    ]
+  },
+  "durationMs": 104316,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:25:23.873Z",
+  "executionId": "audit_1783967019557_ffy4gb"
+}

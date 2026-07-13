@@ -1,0 +1,95 @@
+[2026-07-13T18:43:45.757Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Summary\n\nThis is a Python news-crawler (not a React app — I didn't find any frontend code in `apps/crawler`, so I skipped the re-render category and focused on the equivalent backend concerns: redundant I/O, redundant computation, and caching). I read `base.py`, `main.py`, `models.py`, `providers.py`, and cross-checked against the actual `state/*.json` sizes on disk (up to 177KB / thousands of `seen_urls` entries) to confirm which patterns actually bite at current scale.\n\n### 1. Full state resort + full-file rewrite on every single article (\"N+1\" analog) — highest impact\n\n`base.py:302-314`, inside `crawl()`:\n\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)   # O(n log n) EVERY iteration\nself._save_state(state)             # rewrites the whole JSON file EVERY iteration\n```\n\nThis runs once per URL processed (not just per saved article — the \"skip, not an article\" branch does it too). `seen` is already loaded fully into memory; re-sorting and rewriting the entire list from scratch every iteration means total cost across a run scales O(n²) as `seen_urls` grows. `malagasynews-mbs.json` is already 177KB — this will keep getting slower every run as that provider's history accumulates.\n\nThe sort is purely cosmetic (nicer diffs), not needed for correctness (`seen` is a set either way). Fix: append instead of rebuild+sort.\n\n```python\ndef _save_state(self, state: dict) -> None:\n    ...\n\n# in crawl():\nseen.add(url)\nstate.setdefault(\"seen_urls\", []).append(url)   # O(1) amortized, no full rebuild\nself._save_state(state)\n```\n\nIf you still want deterministic diffs, sort once at the very end of `crawl()` instead of after every article.\n\n### 2. Redundant computation: paragraph text extracted twice per node\n\n`base.py:183-187`:\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- computed again here\n)\n```\n\n`get_all_text(strip=True)` walks the DOM subtree to collect text — doing it twice per `<p>` doubles that cost for every article body. Fix:\n\n```python\nparagraphs = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(text for text in paragraphs if text)\n```\n\n### 3. O(n²) queue drain in sitemap discovery\n\n`base.py:70-72`:\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a plain list\n```\n\nFor Midi's ~118 sub-sitemaps (mentioned in the docstring) this is a minor but easy fix — `Moov`'s crawler already uses `deque` correctly (`providers.py:214`), so this is just an inconsistency:\n\n```python\nfrom collections import deque\nto_visit = deque([sitemap_url])\nwhile to_visit:\n    current = to_visit.popleft()\n```\n\n### 4. Moov fetches every article page twice\n\n`providers.py:224-236`, explicitly acknowledged in the comment: the frontier walker fetches each page to discover related-article links, then `crawl()` calls `parse_article()` which fetches the *same URL again* to extract content. Since the page is already in hand during frontier expansion, cache it and let `parse_article` reuse it instead of re-fetching:\n\n```python\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page   # small per-run dict, cleared per crawl()\n        yield url\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n```\nand have `fetch()`/`parse_article` check `self._page_cache.pop(url, None)` before hitting the network. Halves Moov's network calls.\n\n### 5. Caching opportunity: sitemaps re-fetched in full every run, no conditional GET\n\n`base.py:48-58` (`_fetch_xml`) always does a full unconditional `GET`. Sitemaps rarely change between runs. Store the `ETag`/`Last-Modified` response headers per provider in state, and send `If-None-Match`/`If-Modified-Since` on the next run — a `304` skips re-downloading and re-parsing large sitemap indexes entirely.\n\n### 6. Per-event file open/close for logging\n\n`base.py:151-155` opens, writes, and closes `_log_path` on every single `_log()` call (multiple times per article: \"run started\", \"saved\", \"skip\", \"error\"). This is a deliberate durability tradeoff for `_append_article`/`_save_state` (per the code's own comments about crash-safety), but the log file has no such requirement — losing the last log line on a crash is harmless. You can hold one open handle for the duration of `crawl()`:\n\n```python\ndef crawl(self, limit=10, on_save=None):\n    self._log_path.parent.mkdir(parents=True, exist_ok=True)\n    with self._log_path.open(\"a\", encoding=\"utf-8\") as self._log_fh:\n        ...  # _log() writes to self._log_fh and calls .flush(), no open/close per line\n```\n\n### 7. Scale watch (not a leak, but worth flagging)\n\nNo actual memory leaks — files are all opened via `with` and closed properly, no growing module-level caches. The one thing to watch: `seen: set[str] = set(state.get(\"seen_urls\", []))` (`base.py:283`) loads the entire history into memory every run. At current sizes (max ~180KB/provider) this is a non-issue; if any single provider's history grows into the tens of thousands of URLs, consider a `dbm`/SQLite-backed seen-set instead of a JSON list to avoid the full-file load/parse per run.\n\n---\n\n**Priority order**: #1 (state resort/rewrite) is the one actually degrading over time as your data grows — fix that first. #2 and #3 are cheap one-line fixes. #4 and #5 cut real network cost. #6 is a nice-to-have.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Summary",
+        "content": "\nThis is a Python news-crawler (not a React app — I didn't find any frontend code in `apps/crawler`, so I skipped the re-render category and focused on the equivalent backend concerns: redundant I/O, redundant computation, and caching). I read `base.py`, `main.py`, `models.py`, `providers.py`, and cross-checked against the actual `state/*.json` sizes on disk (up to 177KB / thousands of `seen_urls` entries) to confirm which patterns actually bite at current scale.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. Full state resort + full-file rewrite on every single article (\"N+1\" analog) — highest impact",
+        "content": "\n`base.py:302-314`, inside `crawl()`:\n\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)   # O(n log n) EVERY iteration\nself._save_state(state)             # rewrites the whole JSON file EVERY iteration\n```\n\nThis runs once per URL processed (not just per saved article — the \"skip, not an article\" branch does it too). `seen` is already loaded fully into memory; re-sorting and rewriting the entire list from scratch every iteration means total cost across a run scales O(n²) as `seen_urls` grows. `malagasynews-mbs.json` is already 177KB — this will keep getting slower every run as that provider's history accumulates.\n\nThe sort is purely cosmetic (nicer diffs), not needed for correctness (`seen` is a set either way). Fix: append instead of rebuild+sort.\n\n```python\ndef _save_state(self, state: dict) -> None:\n    ...\n\n",
+        "level": 3
+      },
+      {
+        "title": "in crawl():",
+        "content": "seen.add(url)\nstate.setdefault(\"seen_urls\", []).append(url)   # O(1) amortized, no full rebuild\nself._save_state(state)\n```\n\nIf you still want deterministic diffs, sort once at the very end of `crawl()` instead of after every article.\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Redundant computation: paragraph text extracted twice per node",
+        "content": "\n`base.py:183-187`:\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- computed again here\n)\n```\n\n`get_all_text(strip=True)` walks the DOM subtree to collect text — doing it twice per `<p>` doubles that cost for every article body. Fix:\n\n```python\nparagraphs = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(text for text in paragraphs if text)\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. O(n²) queue drain in sitemap discovery",
+        "content": "\n`base.py:70-72`:\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a plain list\n```\n\nFor Midi's ~118 sub-sitemaps (mentioned in the docstring) this is a minor but easy fix — `Moov`'s crawler already uses `deque` correctly (`providers.py:214`), so this is just an inconsistency:\n\n```python\nfrom collections import deque\nto_visit = deque([sitemap_url])\nwhile to_visit:\n    current = to_visit.popleft()\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. Moov fetches every article page twice",
+        "content": "\n`providers.py:224-236`, explicitly acknowledged in the comment: the frontier walker fetches each page to discover related-article links, then `crawl()` calls `parse_article()` which fetches the *same URL again* to extract content. Since the page is already in hand during frontier expansion, cache it and let `parse_article` reuse it instead of re-fetching:\n\n```python\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page   # small per-run dict, cleared per crawl()\n        yield url\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n```\nand have `fetch()`/`parse_article` check `self._page_cache.pop(url, None)` before hitting the network. Halves Moov's network calls.\n\n",
+        "level": 3
+      },
+      {
+        "title": "5. Caching opportunity: sitemaps re-fetched in full every run, no conditional GET",
+        "content": "\n`base.py:48-58` (`_fetch_xml`) always does a full unconditional `GET`. Sitemaps rarely change between runs. Store the `ETag`/`Last-Modified` response headers per provider in state, and send `If-None-Match`/`If-Modified-Since` on the next run — a `304` skips re-downloading and re-parsing large sitemap indexes entirely.\n\n",
+        "level": 3
+      },
+      {
+        "title": "6. Per-event file open/close for logging",
+        "content": "\n`base.py:151-155` opens, writes, and closes `_log_path` on every single `_log()` call (multiple times per article: \"run started\", \"saved\", \"skip\", \"error\"). This is a deliberate durability tradeoff for `_append_article`/`_save_state` (per the code's own comments about crash-safety), but the log file has no such requirement — losing the last log line on a crash is harmless. You can hold one open handle for the duration of `crawl()`:\n\n```python\ndef crawl(self, limit=10, on_save=None):\n    self._log_path.parent.mkdir(parents=True, exist_ok=True)\n    with self._log_path.open(\"a\", encoding=\"utf-8\") as self._log_fh:\n        ...  # _log() writes to self._log_fh and calls .flush(), no open/close per line\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "7. Scale watch (not a leak, but worth flagging)",
+        "content": "No actual memory leaks — files are all opened via `with` and closed properly, no growing module-level caches. The one thing to watch: `seen: set[str] = set(state.get(\"seen_urls\", []))` (`base.py:283`) loads the entire history into memory every run. At current sizes (max ~180KB/provider) this is a non-issue; if any single provider's history grows into the tens of thousands of URLs, consider a `dbm`/SQLite-backed seen-set instead of a JSON list to avoid the full-file load/parse per run.\n\n---\n\n**Priority order**: #1 (state resort/rewrite) is the one actually degrading over time as your data grows — fix that first. #2 and #3 are cheap one-line fixes. #4 and #5 cut real network cost. #6 is a nice-to-have.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "seen.add(url)\nstate[\"seen_urls\"] = sorted(seen)   # O(n log n) EVERY iteration\nself._save_state(state)             # rewrites the whole JSON file EVERY iteration"
+      },
+      {
+        "language": "python",
+        "code": "def _save_state(self, state: dict) -> None:\n    ...\n\n# in crawl():\nseen.add(url)\nstate.setdefault(\"seen_urls\", []).append(url)   # O(1) amortized, no full rebuild\nself._save_state(state)"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- computed again here\n)"
+      },
+      {
+        "language": "python",
+        "code": "paragraphs = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(text for text in paragraphs if text)"
+      },
+      {
+        "language": "python",
+        "code": "to_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a plain list"
+      },
+      {
+        "language": "python",
+        "code": "from collections import deque\nto_visit = deque([sitemap_url])\nwhile to_visit:\n    current = to_visit.popleft()"
+      },
+      {
+        "language": "python",
+        "code": "def list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page   # small per-run dict, cleared per crawl()\n        yield url\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))"
+      },
+      {
+        "language": "python",
+        "code": "def crawl(self, limit=10, on_save=None):\n    self._log_path.parent.mkdir(parents=True, exist_ok=True)\n    with self._log_path.open(\"a\", encoding=\"utf-8\") as self._log_fh:\n        ...  # _log() writes to self._log_fh and calls .flush(), no open/close per line"
+      }
+    ]
+  },
+  "durationMs": 150607,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:43:45.757Z",
+  "executionId": "optimize_1783968075150_bw81hl"
+}

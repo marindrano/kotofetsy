@@ -1,0 +1,106 @@
+[2026-07-13T18:31:35.746Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "I have enough from reading the code directly. Let me finalize the analysis.\n\n## Performance Analysis: `apps/crawler`\n\nContext: this is a single-threaded Python CLI crawler (no ORM, no React) — so I'm mapping your categories to their nearest real equivalents: repeated-I/O-per-item (the N+1 analog), redundant computation, caching, and resource handling.\n\n### 1. State-file rewrite per article — the real \"N+1\" here (`base.py:311-314`, `302-305`)\n\nEvery single article triggers a full rewrite of `state/<provider>.json`, including `sorted(seen)` over the **entire** seen-URL history:\n\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n) over ALL urls ever seen\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\n...\nself._save_state(state)                    # full JSON dump + atomic rename, every article\n```\n\nFor a provider with, say, 5,000 previously-seen URLs, saving 10 new articles this run does `sorted()` on ~5,000 items **10 times**, and writes the full ~5,000-entry JSON file to disk **10 times** — for state that's 99.8% unchanged. This scales as O(n² log n) over a provider's lifetime.\n\n**Fix** — sorting isn't needed for correctness, only for file readability, and the append-only pattern used for articles.jsonl can be reused here:\n\n```python\n# state/<provider>.seen  — one URL per line, append-only, like articles.jsonl\ndef _load_seen(self) -> set[str]:\n    if not self._seen_path.exists():\n        return set()\n    return set(self._seen_path.read_text(encoding=\"utf-8\").splitlines())\n\ndef _mark_seen(self, url: str) -> None:\n    with self._seen_path.open(\"a\", encoding=\"utf-8\") as f:\n        f.write(url + \"\\n\")\n```\nThis turns the per-article cost from O(n log n) + O(n)-write into O(1) append. Keep `state.json` for small scalar fields only (`total_saved`, `last_run_at`), written just as often but now cheap since it no longer embeds the URL list.\n\n### 2. Redundant computation: `get_all_text()` called twice per paragraph (`base.py:183-187`)\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)     # <-- recomputed\n)\n```\n\n`get_all_text(strip=True)` walks the DOM subtree and re-does string work — it's called twice per paragraph, doubling body-extraction cost on every article, every provider, every run.\n\n**Fix:**\n```python\ntexts = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(t for t in texts if t)\n```\n\n### 3. Caching opportunity: Moov fetches every article page twice (`providers.py:220-228`)\n\nAlready flagged in your own comment as a known tradeoff — `list_article_urls` fetches each page once to expand the frontier, then `crawl()` calls `parse_article(url)` which fetches it **again** via `self.fetch(url)`.\n\n**Fix** — yield the already-fetched page alongside the URL and let `parse_article` accept an optional pre-fetched page instead of always re-fetching:\n\n```python\n# base.py\ndef parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n# providers.py (Moov.list_article_urls) — yield (url, page) pairs instead of just url,\n# and have crawl() pass page through when available.\n```\nThis halves Moov's network traffic and wall-clock time per run (its comment already treats this as a known cost worth fixing when it becomes a problem — this is that point).\n\n### 4. Minor: `discover_sitemap_urls` pops from list front (`base.py:70-72`)\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list\n```\nTrivial at Midi's ~118 sub-sitemaps today, but it's an easy `collections.deque` swap (`popleft()`) if any provider's sitemap index grows:\n```python\nto_visit: deque[str] = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()\n```\n\n### 5. Memory/leak check\nNo leaks found — it's a short-lived CLI process, files are opened/closed per call (`with ... open(...)`), `Fetcher`/`StealthyFetcher` calls are synchronous one-shots. The one thing that *does* grow unbounded across a run is the in-memory `seen` set, but that's inherent to dedup and fine — it's the repeated full-set serialization (item 1) that's the actual cost, not the memory itself.\n\n### Not applicable here\n\"Unnecessary React re-renders\" doesn't apply — `apps/crawler` is pure Python with no frontend code in this directory.\n\n### Priority\n1. Fix #1 (state rewrite) — biggest win, compounds with every provider's history size.\n2. Fix #2 (double `get_all_text`) — free, no behavior change, halves body-parsing cost.\n3. Fix #3 (Moov double-fetch) — moderate refactor, halves Moov's network cost.\n4. Fix #4 — cosmetic/future-proofing only.\n\nWant me to implement any of these?\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Performance Analysis: `apps/crawler`",
+        "content": "\nContext: this is a single-threaded Python CLI crawler (no ORM, no React) — so I'm mapping your categories to their nearest real equivalents: repeated-I/O-per-item (the N+1 analog), redundant computation, caching, and resource handling.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. State-file rewrite per article — the real \"N+1\" here (`base.py:311-314`, `302-305`)",
+        "content": "\nEvery single article triggers a full rewrite of `state/<provider>.json`, including `sorted(seen)` over the **entire** seen-URL history:\n\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n) over ALL urls ever seen\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\n...\nself._save_state(state)                    # full JSON dump + atomic rename, every article\n```\n\nFor a provider with, say, 5,000 previously-seen URLs, saving 10 new articles this run does `sorted()` on ~5,000 items **10 times**, and writes the full ~5,000-entry JSON file to disk **10 times** — for state that's 99.8% unchanged. This scales as O(n² log n) over a provider's lifetime.\n\n**Fix** — sorting isn't needed for correctness, only for file readability, and the append-only pattern used for articles.jsonl can be reused here:\n\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "state/<provider>.seen  — one URL per line, append-only, like articles.jsonl",
+        "content": "def _load_seen(self) -> set[str]:\n    if not self._seen_path.exists():\n        return set()\n    return set(self._seen_path.read_text(encoding=\"utf-8\").splitlines())\n\ndef _mark_seen(self, url: str) -> None:\n    with self._seen_path.open(\"a\", encoding=\"utf-8\") as f:\n        f.write(url + \"\\n\")\n```\nThis turns the per-article cost from O(n log n) + O(n)-write into O(1) append. Keep `state.json` for small scalar fields only (`total_saved`, `last_run_at`), written just as often but now cheap since it no longer embeds the URL list.\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Redundant computation: `get_all_text()` called twice per paragraph (`base.py:183-187`)",
+        "content": "\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)     # <-- recomputed\n)\n```\n\n`get_all_text(strip=True)` walks the DOM subtree and re-does string work — it's called twice per paragraph, doubling body-extraction cost on every article, every provider, every run.\n\n**Fix:**\n```python\ntexts = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(t for t in texts if t)\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Caching opportunity: Moov fetches every article page twice (`providers.py:220-228`)",
+        "content": "\nAlready flagged in your own comment as a known tradeoff — `list_article_urls` fetches each page once to expand the frontier, then `crawl()` calls `parse_article(url)` which fetches it **again** via `self.fetch(url)`.\n\n**Fix** — yield the already-fetched page alongside the URL and let `parse_article` accept an optional pre-fetched page instead of always re-fetching:\n\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "base.py",
+        "content": "def parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n",
+        "level": 1
+      },
+      {
+        "title": "providers.py (Moov.list_article_urls) — yield (url, page) pairs instead of just url,",
+        "content": "",
+        "level": 1
+      },
+      {
+        "title": "and have crawl() pass page through when available.",
+        "content": "```\nThis halves Moov's network traffic and wall-clock time per run (its comment already treats this as a known cost worth fixing when it becomes a problem — this is that point).\n\n",
+        "level": 1
+      },
+      {
+        "title": "4. Minor: `discover_sitemap_urls` pops from list front (`base.py:70-72`)",
+        "content": "\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list\n```\nTrivial at Midi's ~118 sub-sitemaps today, but it's an easy `collections.deque` swap (`popleft()`) if any provider's sitemap index grows:\n```python\nto_visit: deque[str] = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "5. Memory/leak check",
+        "content": "No leaks found — it's a short-lived CLI process, files are opened/closed per call (`with ... open(...)`), `Fetcher`/`StealthyFetcher` calls are synchronous one-shots. The one thing that *does* grow unbounded across a run is the in-memory `seen` set, but that's inherent to dedup and fine — it's the repeated full-set serialization (item 1) that's the actual cost, not the memory itself.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Not applicable here",
+        "content": "\"Unnecessary React re-renders\" doesn't apply — `apps/crawler` is pure Python with no frontend code in this directory.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Priority",
+        "content": "1. Fix #1 (state rewrite) — biggest win, compounds with every provider's history size.\n2. Fix #2 (double `get_all_text`) — free, no behavior change, halves body-parsing cost.\n3. Fix #3 (Moov double-fetch) — moderate refactor, halves Moov's network cost.\n4. Fix #4 — cosmetic/future-proofing only.\n\nWant me to implement any of these?",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "seen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n) over ALL urls ever seen\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\n...\nself._save_state(state)                    # full JSON dump + atomic rename, every article"
+      },
+      {
+        "language": "python",
+        "code": "# state/<provider>.seen  — one URL per line, append-only, like articles.jsonl\ndef _load_seen(self) -> set[str]:\n    if not self._seen_path.exists():\n        return set()\n    return set(self._seen_path.read_text(encoding=\"utf-8\").splitlines())\n\ndef _mark_seen(self, url: str) -> None:\n    with self._seen_path.open(\"a\", encoding=\"utf-8\") as f:\n        f.write(url + \"\\n\")"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)     # <-- recomputed\n)"
+      },
+      {
+        "language": "python",
+        "code": "texts = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(t for t in texts if t)"
+      },
+      {
+        "language": "python",
+        "code": "# base.py\ndef parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n# providers.py (Moov.list_article_urls) — yield (url, page) pairs instead of just url,\n# and have crawl() pass page through when available."
+      },
+      {
+        "language": "python",
+        "code": "to_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list"
+      },
+      {
+        "language": "python",
+        "code": "to_visit: deque[str] = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()"
+      }
+    ]
+  },
+  "durationMs": 371871,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:31:35.746Z",
+  "executionId": "optimize_1783967123875_iqanmz"
+}

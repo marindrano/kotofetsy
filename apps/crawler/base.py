@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import re
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from abc import ABC
@@ -11,6 +12,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 from models import Article, SiteSelectors
 from scrapling.fetchers import Fetcher, StealthyFetcher
@@ -210,6 +212,23 @@ class NewsSource(ABC):
             category_el = page.css(s.category).first
             category = category_el.get_all_text(strip=True) if category_el else None
 
+        # ponytail: generic across all providers (og:image / iframe|video are a web-wide
+        # convention), so no per-provider selector needed — unlike title/body/etc above.
+        cover_el = page.css("meta[property='og:image']").first
+        cover_image = cover_el.attrib.get("content") if cover_el else None
+
+        embed_url = None
+        for iframe in page.css("iframe"):
+            src = iframe.attrib.get("src")
+            if src and src != "about:blank":
+                embed_url = src
+                break
+        if not embed_url:
+            video_el = page.css("video source").first
+            embed_url = video_el.attrib.get("src") if video_el else None
+
+        images = self._extract_images(page, url, cover_image)
+
         return Article(
             url=url,
             title=title,
@@ -219,12 +238,48 @@ class NewsSource(ABC):
             category=category,
             source=self.source_name,
             scraped_at=datetime.now(timezone.utc).isoformat(),
+            cover_image=cover_image,
+            embed_url=embed_url,
+            images=images,
         )
 
-    def crawl(self, limit: int = 10) -> list[Article]:
+    # Scoped to common WP/theme content containers rather than every <img> on the page,
+    # so we skip site chrome (logos, nav, ad tiles). Dedup + absolute URLs; cover_image
+    # is included first if present. og:image is usually already absolute; body imgs often
+    # relative, hence urljoin against the article url.
+    _IMG_CONTAINERS = (
+        "article img, .entry-content img, .td-post-content img, "
+        ".post-content img, .vcex-post-content img, figure img"
+    )
+
+    def _extract_images(self, page, url: str, cover_image: Optional[str]) -> list[str]:
+        images: list[str] = []
+        seen: set[str] = set()
+        candidates = []
+        if cover_image:
+            candidates.append(cover_image)
+        for img in page.css(self._IMG_CONTAINERS):
+            # data-src first: lazy-load themes (jnews etc.) put the real URL there and a
+            # placeholder in src, so preferring src would grab the placeholder.
+            candidates.append(img.attrib.get("data-src") or img.attrib.get("src"))
+        for src in candidates:
+            if not src or src.startswith("data:"):
+                continue
+            absolute = urljoin(url, src)
+            if absolute not in seen:
+                seen.add(absolute)
+                images.append(absolute)
+        return images
+
+    def crawl(self, limit: int = 10, on_save=None) -> list[Article]:
         """Resumable: skips URLs already saved in a prior run, checkpoints after every
         article (state file + JSONL append), so a crash/interrupt only ever loses the
-        one article that was in flight — everything before it is already on disk."""
+        one article that was in flight — everything before it is already on disk.
+
+        limit <= 0 means unlimited: keep going until list_article_urls() is exhausted.
+        on_save(article), if given, is called after each save — used to stream live
+        progress to stdout so the Go TUI's per-provider counter updates during the run
+        (not just when crawl() returns)."""
         state = self._load_state()
         seen: set[str] = set(state.get("seen_urls", []))
         saved: list[Article] = []
@@ -240,7 +295,15 @@ class NewsSource(ABC):
                     self._log(f"error fetching {url}: {exc}")
                     continue
                 if not article:
-                    self._log(f"skip (title selector didn't match) {url}")
+                    # Title selector didn't match → structurally not an article (e.g. an
+                    # author/tag page that links in from article lists). Mark it seen so we
+                    # never fetch it again — otherwise it gets re-fetched every time it
+                    # reappears on another listing page, forever. (Transient fetch errors
+                    # raise above and are NOT marked seen, so those still retry next run.)
+                    seen.add(url)
+                    state["seen_urls"] = sorted(seen)
+                    self._save_state(state)
+                    self._log(f"skip (not an article) {url}")
                     continue
 
                 seen.add(url)
@@ -251,8 +314,10 @@ class NewsSource(ABC):
                 state["last_run_at"] = datetime.now(timezone.utc).isoformat()
                 self._save_state(state)
                 self._log(f"saved {url}")
+                if on_save:
+                    on_save(article)
 
-                if len(saved) >= limit:
+                if limit > 0 and len(saved) >= limit:
                     state["last_stopped_reason"] = "limit reached"
                     self._save_state(state)
                     self._log(f"stopped: limit reached ({limit} new articles)")
@@ -265,5 +330,7 @@ class NewsSource(ABC):
             state["last_stopped_reason"] = f"error: {exc}"
             self._save_state(state)
             self._log(f"stopped: error during discovery: {exc}")
-            raise
+            # ponytail: don't re-raise. A transient discovery error (network / HTTP2 curl:16)
+            # shouldn't crash the provider subprocess and dump a traceback into the TUI — the
+            # state is saved and the run resumes next time. Stop gracefully with what we got.
         return saved

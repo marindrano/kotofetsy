@@ -1,0 +1,64 @@
+[2026-07-13T18:26:39.844Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "I don't have access outside `apps/cli`, so I'll scope the analysis to this Go TUI application (the crawler is a separate sibling directory I can't read in this session).\n\nHere's what I found in `apps/cli` — a ~450-line Bubble Tea TUI that shells out to the Python crawler and streams its stdout. It has no database, no React, so the standard categories map to Go/TUI equivalents:\n\n## 1. Redundant computation on every render (the \"N+1\" analog here)\n\n`articlesSaved()` in `tui.go:360-368` does a full linear scan of a provider's **entire accumulated log history** every time `View()` is called — and `View()` fires on *every* Bubble Tea message (every keystroke, every spinner tick, every stdout line from every running provider).\n\n```go\n// tui.go:380-408 — viewRunning() calls this once per provider, every render\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}\n```\n\nWith N providers each accumulating L lines, that's O(N·L) work repeated on **every spinner tick** (default ~100ms), even for providers whose logs haven't changed. For a long crawl with thousands of lines, this becomes the dominant per-frame cost.\n\n**Fix — maintain a running counter incrementally, updated only when a line is appended:**\n\n```go\ntype providerStatus struct {\n    state   providerState\n    lines   []string\n    savedCt int // maintained incrementally, no full rescan\n}\n\n// in Update(), statusMsg case (tui.go:107-114):\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.state = stateRunning\n    st.lines = append(st.lines, msg.line)\n    if strings.HasPrefix(msg.line, \"  - \") {\n        st.savedCt++\n    }\n    ...\n\n// viewRunning() then just reads st.savedCt directly, no articlesSaved() call\n```\n\nThis turns an O(N·L) per-frame cost into O(1).\n\n## 2. Unbounded memory growth (\"leak\") in log accumulation\n\n`providerStatus.lines` (`tui.go:36`) grows forever for the lifetime of the run — nothing ever caps or trims it. `refreshViewport()` (`tui.go:245-252`) also does `strings.Join(m.statuses[name].lines, \"\\n\")` on every refresh, allocating a fresh full-history string each time.\n\nFor `--limit 0` (\"run until exhausted\"), a noisy provider (e.g. scrapling debug logs folded into stdout via `cmd.Stderr = cmd.Stdout` in `main.go:66`) can accumulate an arbitrarily large slice, and every viewport refresh re-copies all of it into a new string.\n\n**Fix — cap retained lines with a ring buffer, and only rejoin the tail:**\n\n```go\nconst maxLogLines = 2000\n\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.lines = append(st.lines, msg.line)\n    if len(st.lines) > maxLogLines {\n        st.lines = st.lines[len(st.lines)-maxLogLines:] // drop oldest\n    }\n```\n\nThis bounds both the retained memory and the cost of the `strings.Join` in `refreshViewport`.\n\n## 3. Redundant string rebuilding for non-highlighted providers\n\n`refreshViewport()` is only called when `m.highlighted() == msg.provider` (`tui.go:111, 126`), which is already correct — good, that's not wasted work. No issue there.\n\n## 4. `viewRunning()` rebuilds all styled strings every frame regardless of change\n\nEvery `View()` call re-renders every row for every provider (`tui.go:384-408`), including `lipgloss` style application (`selectedStyle.Render`, `runningStyle.Render`, etc.) even for providers whose state hasn't changed since the last frame. This is idiomatic for Bubble Tea's immediate-mode rendering model (Bubble Tea diffs the final terminal output itself), so it's not actually wasteful in the way it would be in a retained-mode UI — flagging it only because it's the closest analog to \"unnecessary re-renders,\" but **no fix needed here**; this is correct usage of the framework.\n\n## 5. Process spawning has no concurrency cap\n\n`startRun()` (`tui.go:254-274`) and `runHeadless()` (`main.go:80-95`) launch **one goroutine + one `uv run main.py` subprocess per selected provider simultaneously**, with no limit. If a user selects all 11 providers, that's 11 concurrent Python interpreter startups + `uv` dependency resolution overhead at once. This isn't a memory leak, but it's a real resource/scheduling concern:\n\n**Fix — bound concurrency with a semaphore:**\n\n```go\nsem := make(chan struct{}, 4) // cap concurrent crawler processes\n\ngo func() {\n    sem <- struct{}{}\n    defer func() { <-sem }()\n    err := runCrawler(name, m.limit, m.crawlerDir, ...)\n    ...\n}()\n```\n\n## Summary\n\n| Category | Finding | Location |\n|---|---|---|\n| Redundant computation | `articlesSaved()` full rescan every frame | `tui.go:360-368` |\n| Memory growth | Unbounded `lines` slice per provider | `tui.go:36`, `tui.go:250` |\n| Resource usage | No cap on concurrent subprocess spawns | `tui.go:267`, `main.go:84` |\n| N+1 / React re-renders | Not applicable — no DB layer, no React; Bubble Tea's per-message `View()` re-render is correct for its immediate-mode model | — |\n| Caching | Same as #1 — `savedCt` should be cached/incremental rather than recomputed | `tui.go:398` |\n\nThe `articlesSaved()` fix (#1) is the highest-value one — it's the only true \"hot path\" issue, hit on every tick during a run. Want me to implement it?\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. Redundant computation on every render (the \"N+1\" analog here)",
+        "content": "\n`articlesSaved()` in `tui.go:360-368` does a full linear scan of a provider's **entire accumulated log history** every time `View()` is called — and `View()` fires on *every* Bubble Tea message (every keystroke, every spinner tick, every stdout line from every running provider).\n\n```go\n// tui.go:380-408 — viewRunning() calls this once per provider, every render\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}\n```\n\nWith N providers each accumulating L lines, that's O(N·L) work repeated on **every spinner tick** (default ~100ms), even for providers whose logs haven't changed. For a long crawl with thousands of lines, this becomes the dominant per-frame cost.\n\n**Fix — maintain a running counter incrementally, updated only when a line is appended:**\n\n```go\ntype providerStatus struct {\n    state   providerState\n    lines   []string\n    savedCt int // maintained incrementally, no full rescan\n}\n\n// in Update(), statusMsg case (tui.go:107-114):\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.state = stateRunning\n    st.lines = append(st.lines, msg.line)\n    if strings.HasPrefix(msg.line, \"  - \") {\n        st.savedCt++\n    }\n    ...\n\n// viewRunning() then just reads st.savedCt directly, no articlesSaved() call\n```\n\nThis turns an O(N·L) per-frame cost into O(1).\n\n",
+        "level": 2
+      },
+      {
+        "title": "2. Unbounded memory growth (\"leak\") in log accumulation",
+        "content": "\n`providerStatus.lines` (`tui.go:36`) grows forever for the lifetime of the run — nothing ever caps or trims it. `refreshViewport()` (`tui.go:245-252`) also does `strings.Join(m.statuses[name].lines, \"\\n\")` on every refresh, allocating a fresh full-history string each time.\n\nFor `--limit 0` (\"run until exhausted\"), a noisy provider (e.g. scrapling debug logs folded into stdout via `cmd.Stderr = cmd.Stdout` in `main.go:66`) can accumulate an arbitrarily large slice, and every viewport refresh re-copies all of it into a new string.\n\n**Fix — cap retained lines with a ring buffer, and only rejoin the tail:**\n\n```go\nconst maxLogLines = 2000\n\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.lines = append(st.lines, msg.line)\n    if len(st.lines) > maxLogLines {\n        st.lines = st.lines[len(st.lines)-maxLogLines:] // drop oldest\n    }\n```\n\nThis bounds both the retained memory and the cost of the `strings.Join` in `refreshViewport`.\n\n",
+        "level": 2
+      },
+      {
+        "title": "3. Redundant string rebuilding for non-highlighted providers",
+        "content": "\n`refreshViewport()` is only called when `m.highlighted() == msg.provider` (`tui.go:111, 126`), which is already correct — good, that's not wasted work. No issue there.\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. `viewRunning()` rebuilds all styled strings every frame regardless of change",
+        "content": "\nEvery `View()` call re-renders every row for every provider (`tui.go:384-408`), including `lipgloss` style application (`selectedStyle.Render`, `runningStyle.Render`, etc.) even for providers whose state hasn't changed since the last frame. This is idiomatic for Bubble Tea's immediate-mode rendering model (Bubble Tea diffs the final terminal output itself), so it's not actually wasteful in the way it would be in a retained-mode UI — flagging it only because it's the closest analog to \"unnecessary re-renders,\" but **no fix needed here**; this is correct usage of the framework.\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. Process spawning has no concurrency cap",
+        "content": "\n`startRun()` (`tui.go:254-274`) and `runHeadless()` (`main.go:80-95`) launch **one goroutine + one `uv run main.py` subprocess per selected provider simultaneously**, with no limit. If a user selects all 11 providers, that's 11 concurrent Python interpreter startups + `uv` dependency resolution overhead at once. This isn't a memory leak, but it's a real resource/scheduling concern:\n\n**Fix — bound concurrency with a semaphore:**\n\n```go\nsem := make(chan struct{}, 4) // cap concurrent crawler processes\n\ngo func() {\n    sem <- struct{}{}\n    defer func() { <-sem }()\n    err := runCrawler(name, m.limit, m.crawlerDir, ...)\n    ...\n}()\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "Summary",
+        "content": "| Category | Finding | Location |\n|---|---|---|\n| Redundant computation | `articlesSaved()` full rescan every frame | `tui.go:360-368` |\n| Memory growth | Unbounded `lines` slice per provider | `tui.go:36`, `tui.go:250` |\n| Resource usage | No cap on concurrent subprocess spawns | `tui.go:267`, `main.go:84` |\n| N+1 / React re-renders | Not applicable — no DB layer, no React; Bubble Tea's per-message `View()` re-render is correct for its immediate-mode model | — |\n| Caching | Same as #1 — `savedCt` should be cached/incremental rather than recomputed | `tui.go:398` |\n\nThe `articlesSaved()` fix (#1) is the highest-value one — it's the only true \"hot path\" issue, hit on every tick during a run. Want me to implement it?",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "// tui.go:380-408 — viewRunning() calls this once per provider, every render\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n    state   providerState\n    lines   []string\n    savedCt int // maintained incrementally, no full rescan\n}\n\n// in Update(), statusMsg case (tui.go:107-114):\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.state = stateRunning\n    st.lines = append(st.lines, msg.line)\n    if strings.HasPrefix(msg.line, \"  - \") {\n        st.savedCt++\n    }\n    ...\n\n// viewRunning() then just reads st.savedCt directly, no articlesSaved() call"
+      },
+      {
+        "language": "go",
+        "code": "const maxLogLines = 2000\n\ncase statusMsg:\n    st := m.statuses[msg.provider]\n    st.lines = append(st.lines, msg.line)\n    if len(st.lines) > maxLogLines {\n        st.lines = st.lines[len(st.lines)-maxLogLines:] // drop oldest\n    }"
+      },
+      {
+        "language": "go",
+        "code": "sem := make(chan struct{}, 4) // cap concurrent crawler processes\n\ngo func() {\n    sem <- struct{}{}\n    defer func() { <-sem }()\n    err := runCrawler(name, m.limit, m.crawlerDir, ...)\n    ...\n}()"
+      }
+    ]
+  },
+  "durationMs": 126745,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:26:39.844Z",
+  "executionId": "optimize_1783967073099_jdgc9i"
+}

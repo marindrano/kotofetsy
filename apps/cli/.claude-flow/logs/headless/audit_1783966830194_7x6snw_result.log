@@ -1,0 +1,98 @@
+[2026-07-13T18:22:23.060Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my comprehensive security analysis of the codebase, here's the JSON report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"main.go\",\n      \"line\": 36,\n      \"description\": \"Path Traversal Risk: The --crawler-dir flag accepts any arbitrary path without validation. An attacker could specify a path to a malicious directory containing a crafted main.py file, potentially leading to code execution.\",\n      \"remediation\": \"Validate that crawlerDir exists, is a directory, and optionally restrict it to relative paths only. Verify it contains expected crawler files before execution.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 40,\n      \"description\": \"Missing Provider Whitelist Validation (Headless Mode): The --providers flag in headless mode accepts arbitrary comma-separated provider names without validating against the hardcoded whitelist. Interactive mode properly restricts selection, but headless bypasses this check.\",\n      \"remediation\": \"Add validation to check each provider name against the providers whitelist before passing to runCrawler(). Reject invalid provider names with an error message.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 42,\n      \"description\": \"Argument Handling: While the use of exec.Command() with argument array (not shell string) is secure, provider names derived from CLI flags could potentially be malformed, causing unexpected behavior in the Python crawler if not properly validated upstream.\",\n      \"remediation\": \"Validate provider names match expected format (alphanumeric, hyphens) before passing to subprocess.\"\n    }\n  ],\n  \"riskScore\": 42,\n  \"riskLevel\": \"MEDIUM\",\n  \"summary\": {\n    \"criticalFindings\": 0,\n    \"highFindings\": 1,\n    \"mediumFindings\": 1,\n    \"lowFindings\": 1,\n    \"cleanAreas\": [\n      \"No hardcoded secrets or credentials\",\n      \"No SQL injection risks (no database queries)\",\n      \"No XSS vulnerabilities (CLI tool, not web)\",\n      \"Secure command execution pattern using exec.Command with argument array\",\n      \"Proper numeric input validation with range checks\",\n      \"Legitimate dependencies only (Charm Bracelet TUI libraries)\"\n    ]\n  },\n  \"recommendations\": [\n    {\n      \"priority\": \"CRITICAL\",\n      \"action\": \"Add whitelist validation for provider names in headless mode to prevent arbitrary input\",\n      \"implementation\": \"Before calling runHeadless(), validate each provider name against the known providers list\"\n    },\n    {\n      \"priority\": \"HIGH\",\n      \"action\": \"Validate crawlerDir path to prevent path traversal attacks\",\n      \"implementation\": \"Use os.Stat() to verify directory exists and contains expected files; consider restricting to relative paths\"\n    },\n    {\n      \"priority\": \"MEDIUM\",\n      \"action\": \"Add format validation for provider names (alphanumeric + hyphens only)\",\n      \"implementation\": \"Use regex or whitelist check to ensure provider names match expected pattern\"\n    },\n    {\n      \"priority\": \"LOW\",\n      \"action\": \"Add verbose/debug logging flag for better troubleshooting\",\n      \"implementation\": \"Add --verbose flag to capture stderr separately for debugging\"\n    },\n    {\n      \"priority\": \"INFORMATIONAL\",\n      \"action\": \"Add security documentation about safe CLI usage patterns\",\n      \"implementation\": \"Document which flags require special handling and why\"\n    }\n  ],\n  \"securityProfile\": {\n    \"hardcodedSecrets\": \"✅ CLEAN - No credentials found\",\n    \"sqlInjection\": \"✅ N/A - No database interactions\",\n    \"xssVulnerabilities\": \"✅ N/A - Not a web application\",\n    \"dependencyRisk\": \"✅ LOW - All legitimate TUI libraries\",\n    \"authenticationIssues\": \"✅ N/A - Local CLI tool only\",\n    \"commandInjection\": \"⚠️ MITIGATED - Uses safe exec.Command() but input validation needed\",\n    \"pathTraversal\": \"⚠️ PRESENT - crawlerDir flag not validated\",\n    \"inputValidation\": \"⚠️ PARTIAL - Some validation present but incomplete in headless mode\"\n  },\n  \"codebaseMetrics\": {\n    \"totalLines\": 524,\n    \"mainGo\": 95,\n    \"tuiGo\": 429,\n    \"dependencies\": 3,\n    \"language\": \"Go 1.26.1\",\n    \"type\": \"CLI/TUI\"\n  }\n}\n```\n\n## Key Findings\n\n**Risk Score: 42/100 (MEDIUM)**\n\nThe codebase is generally secure with good foundational practices, but has **2 actionable vulnerabilities** that should be addressed:\n\n1. **Path Traversal (HIGH)** – The `--crawler-dir` flag accepts any path. Requires validation.\n2. **Unvalidated Provider Names (MEDIUM)** – Headless mode bypasses the whitelist check available in interactive mode.\n\nBoth are mitigated somewhat by the secure command execution pattern (argument array instead of shell string), but should still be fixed. With the recommended changes, this would drop to ~20/100 (low risk).\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "main.go",
+        "line": 36,
+        "description": "Path Traversal Risk: The --crawler-dir flag accepts any arbitrary path without validation. An attacker could specify a path to a malicious directory containing a crafted main.py file, potentially leading to code execution.",
+        "remediation": "Validate that crawlerDir exists, is a directory, and optionally restrict it to relative paths only. Verify it contains expected crawler files before execution."
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 40,
+        "description": "Missing Provider Whitelist Validation (Headless Mode): The --providers flag in headless mode accepts arbitrary comma-separated provider names without validating against the hardcoded whitelist. Interactive mode properly restricts selection, but headless bypasses this check.",
+        "remediation": "Add validation to check each provider name against the providers whitelist before passing to runCrawler(). Reject invalid provider names with an error message."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 42,
+        "description": "Argument Handling: While the use of exec.Command() with argument array (not shell string) is secure, provider names derived from CLI flags could potentially be malformed, causing unexpected behavior in the Python crawler if not properly validated upstream.",
+        "remediation": "Validate provider names match expected format (alphanumeric, hyphens) before passing to subprocess."
+      }
+    ],
+    "riskScore": 42,
+    "riskLevel": "MEDIUM",
+    "summary": {
+      "criticalFindings": 0,
+      "highFindings": 1,
+      "mediumFindings": 1,
+      "lowFindings": 1,
+      "cleanAreas": [
+        "No hardcoded secrets or credentials",
+        "No SQL injection risks (no database queries)",
+        "No XSS vulnerabilities (CLI tool, not web)",
+        "Secure command execution pattern using exec.Command with argument array",
+        "Proper numeric input validation with range checks",
+        "Legitimate dependencies only (Charm Bracelet TUI libraries)"
+      ]
+    },
+    "recommendations": [
+      {
+        "priority": "CRITICAL",
+        "action": "Add whitelist validation for provider names in headless mode to prevent arbitrary input",
+        "implementation": "Before calling runHeadless(), validate each provider name against the known providers list"
+      },
+      {
+        "priority": "HIGH",
+        "action": "Validate crawlerDir path to prevent path traversal attacks",
+        "implementation": "Use os.Stat() to verify directory exists and contains expected files; consider restricting to relative paths"
+      },
+      {
+        "priority": "MEDIUM",
+        "action": "Add format validation for provider names (alphanumeric + hyphens only)",
+        "implementation": "Use regex or whitelist check to ensure provider names match expected pattern"
+      },
+      {
+        "priority": "LOW",
+        "action": "Add verbose/debug logging flag for better troubleshooting",
+        "implementation": "Add --verbose flag to capture stderr separately for debugging"
+      },
+      {
+        "priority": "INFORMATIONAL",
+        "action": "Add security documentation about safe CLI usage patterns",
+        "implementation": "Document which flags require special handling and why"
+      }
+    ],
+    "securityProfile": {
+      "hardcodedSecrets": "✅ CLEAN - No credentials found",
+      "sqlInjection": "✅ N/A - No database interactions",
+      "xssVulnerabilities": "✅ N/A - Not a web application",
+      "dependencyRisk": "✅ LOW - All legitimate TUI libraries",
+      "authenticationIssues": "✅ N/A - Local CLI tool only",
+      "commandInjection": "⚠️ MITIGATED - Uses safe exec.Command() but input validation needed",
+      "pathTraversal": "⚠️ PRESENT - crawlerDir flag not validated",
+      "inputValidation": "⚠️ PARTIAL - Some validation present but incomplete in headless mode"
+    },
+    "codebaseMetrics": {
+      "totalLines": 524,
+      "mainGo": 95,
+      "tuiGo": 429,
+      "dependencies": 3,
+      "language": "Go 1.26.1",
+      "type": "CLI/TUI"
+    }
+  },
+  "durationMs": 112866,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:22:23.060Z",
+  "executionId": "audit_1783966830194_7x6snw"
+}

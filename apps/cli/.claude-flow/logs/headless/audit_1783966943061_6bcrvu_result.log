@@ -1,0 +1,105 @@
+[2026-07-13T18:24:34.543Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Security Audit Report\n\nYour codebase has been analyzed for vulnerabilities. Here's the comprehensive JSON report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"critical\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 60,\n      \"type\": \"command-injection\",\n      \"description\": \"Path Traversal via crawlerDir flag - User-supplied crawlerDir is used directly without validation, allowing directory traversal attacks (e.g., '../../../etc/')\",\n      \"recommendation\": \"Validate crawlerDir with filepath.Clean() and reject '..' components\"\n    },\n    {\n      \"severity\": \"critical\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 42,\n      \"type\": \"command-injection\",\n      \"description\": \"Unvalidated provider names in headless mode passed directly to exec.Command without validation against hardcoded providers list\",\n      \"recommendation\": \"Validate each provider name against whitelist before execution\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 60,\n      \"type\": \"command-execution\",\n      \"description\": \"No verification of crawlerDir existence or accessibility; potential symlink attacks if directory is attacker-controlled\",\n      \"recommendation\": \"Validate: directory exists, contains main.py, rejects symlinks\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"apps/cli/tui.go\",\n      \"line\": 186,\n      \"type\": \"input-validation\",\n      \"description\": \"Missing upper bound validation on limit input - users can enter arbitrarily large integers causing DoS/resource exhaustion\",\n      \"recommendation\": \"Add upper bound (e.g., max 10000): if limit < 0 || limit > MaxLimit\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 42,\n      \"type\": \"input-validation\",\n      \"description\": \"No bounds checking on provider names - attacker could pass 'all,all,all,all,...' causing resource exhaustion\",\n      \"recommendation\": \"Limit to max 50 providers, max 50 chars per name, deduplicate\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 66,\n      \"type\": \"information-disclosure\",\n      \"description\": \"Stderr merged with stdout without filtering - leaks sensitive crawler errors and internal structure to users\",\n      \"recommendation\": \"Capture/filter stderr separately through sanitizer function\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 84,\n      \"type\": \"race-condition\",\n      \"description\": \"Concurrent goroutines writing to stdout unsynchronized in headless mode - output interleaved, audit logs unreliable\",\n      \"recommendation\": \"Use mutex-protected logging for concurrent output\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 32,\n      \"type\": \"info-disclosure\",\n      \"description\": \"Help text reveals directory structure 'apps/crawler', helping attackers plan traversal attacks\",\n      \"recommendation\": \"Use generic help text without mentioning project structure\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"apps/cli/main.go\",\n      \"line\": 60,\n      \"type\": \"process-management\",\n      \"description\": \"No signal handling for graceful shutdown - child processes may continue running after termination\",\n      \"recommendation\": \"Implement SIGTERM/SIGINT handlers to kill child processes cleanly\"\n    }\n  ],\n  \"riskScore\": 72,\n  \"criticalIssues\": 2,\n  \"recommendations\": [\n    \"🔴 CRITICAL (Day 1): Add path traversal protection to crawlerDir - validate with filepath.Abs() and reject '..' components\",\n    \"🔴 CRITICAL (Day 1): Whitelist-validate all provider names before exec.Command execution\",\n    \"🟠 HIGH (This Sprint): Implement input validation layer with upper bounds (limit: 10000, providers: 50, string length: 50)\",\n    \"🟠 HIGH (This Sprint): Filter stderr separately to prevent information disclosure\",\n    \"🟡 MEDIUM (Next Sprint): Add mutex-protected logging for concurrent output synchronization\",\n    \"🟡 MEDIUM (Next Sprint): Validate crawlerDir: check existence, verify main.py exists, reject symlinks\",\n    \"🟡 MEDIUM (Next Sprint): Implement SIGTERM/SIGINT handlers for graceful child process shutdown\",\n    \"⚪ LOW: Sanitize crawler output before TUI display - redact URLs, paths, timestamps\",\n    \"⚪ PROCESS: Add security testing to CI/CD (gosec, fuzzing of command injection vectors)\"\n  ],\n  \"dependencies\": {\n    \"status\": \"No known CVEs in Go UI dependencies (bubbles, bubbletea, lipgloss)\",\n    \"note\": \"Python crawler dependencies in apps/crawler not analyzed this pass\"\n  }\n}\n```\n\n### Priority Action Items\n\n| Issue | Severity | Fix Effort | Impact |\n|-------|----------|-----------|--------|\n| Path traversal in `crawlerDir` flag | Critical | 1-2 hours | Arbitrary code execution |\n| Unvalidated provider names | Critical | 1-2 hours | Command injection |\n| Missing input bounds | High | 1 hour | DoS/resource exhaustion |\n| Stderr information leakage | High | 2 hours | Data exposure |\n| Output race condition | Medium | 2 hours | Audit log unreliability |\n\nWould you like me to create pull requests fixing any of these vulnerabilities?\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "critical",
+        "file": "apps/cli/main.go",
+        "line": 60,
+        "type": "command-injection",
+        "description": "Path Traversal via crawlerDir flag - User-supplied crawlerDir is used directly without validation, allowing directory traversal attacks (e.g., '../../../etc/')",
+        "recommendation": "Validate crawlerDir with filepath.Clean() and reject '..' components"
+      },
+      {
+        "severity": "critical",
+        "file": "apps/cli/main.go",
+        "line": 42,
+        "type": "command-injection",
+        "description": "Unvalidated provider names in headless mode passed directly to exec.Command without validation against hardcoded providers list",
+        "recommendation": "Validate each provider name against whitelist before execution"
+      },
+      {
+        "severity": "high",
+        "file": "apps/cli/main.go",
+        "line": 60,
+        "type": "command-execution",
+        "description": "No verification of crawlerDir existence or accessibility; potential symlink attacks if directory is attacker-controlled",
+        "recommendation": "Validate: directory exists, contains main.py, rejects symlinks"
+      },
+      {
+        "severity": "medium",
+        "file": "apps/cli/tui.go",
+        "line": 186,
+        "type": "input-validation",
+        "description": "Missing upper bound validation on limit input - users can enter arbitrarily large integers causing DoS/resource exhaustion",
+        "recommendation": "Add upper bound (e.g., max 10000): if limit < 0 || limit > MaxLimit"
+      },
+      {
+        "severity": "medium",
+        "file": "apps/cli/main.go",
+        "line": 42,
+        "type": "input-validation",
+        "description": "No bounds checking on provider names - attacker could pass 'all,all,all,all,...' causing resource exhaustion",
+        "recommendation": "Limit to max 50 providers, max 50 chars per name, deduplicate"
+      },
+      {
+        "severity": "medium",
+        "file": "apps/cli/main.go",
+        "line": 66,
+        "type": "information-disclosure",
+        "description": "Stderr merged with stdout without filtering - leaks sensitive crawler errors and internal structure to users",
+        "recommendation": "Capture/filter stderr separately through sanitizer function"
+      },
+      {
+        "severity": "medium",
+        "file": "apps/cli/main.go",
+        "line": 84,
+        "type": "race-condition",
+        "description": "Concurrent goroutines writing to stdout unsynchronized in headless mode - output interleaved, audit logs unreliable",
+        "recommendation": "Use mutex-protected logging for concurrent output"
+      },
+      {
+        "severity": "low",
+        "file": "apps/cli/main.go",
+        "line": 32,
+        "type": "info-disclosure",
+        "description": "Help text reveals directory structure 'apps/crawler', helping attackers plan traversal attacks",
+        "recommendation": "Use generic help text without mentioning project structure"
+      },
+      {
+        "severity": "low",
+        "file": "apps/cli/main.go",
+        "line": 60,
+        "type": "process-management",
+        "description": "No signal handling for graceful shutdown - child processes may continue running after termination",
+        "recommendation": "Implement SIGTERM/SIGINT handlers to kill child processes cleanly"
+      }
+    ],
+    "riskScore": 72,
+    "criticalIssues": 2,
+    "recommendations": [
+      "🔴 CRITICAL (Day 1): Add path traversal protection to crawlerDir - validate with filepath.Abs() and reject '..' components",
+      "🔴 CRITICAL (Day 1): Whitelist-validate all provider names before exec.Command execution",
+      "🟠 HIGH (This Sprint): Implement input validation layer with upper bounds (limit: 10000, providers: 50, string length: 50)",
+      "🟠 HIGH (This Sprint): Filter stderr separately to prevent information disclosure",
+      "🟡 MEDIUM (Next Sprint): Add mutex-protected logging for concurrent output synchronization",
+      "🟡 MEDIUM (Next Sprint): Validate crawlerDir: check existence, verify main.py exists, reject symlinks",
+      "🟡 MEDIUM (Next Sprint): Implement SIGTERM/SIGINT handlers for graceful child process shutdown",
+      "⚪ LOW: Sanitize crawler output before TUI display - redact URLs, paths, timestamps",
+      "⚪ PROCESS: Add security testing to CI/CD (gosec, fuzzing of command injection vectors)"
+    ],
+    "dependencies": {
+      "status": "No known CVEs in Go UI dependencies (bubbles, bubbletea, lipgloss)",
+      "note": "Python crawler dependencies in apps/crawler not analyzed this pass"
+    }
+  },
+  "durationMs": 131482,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:24:34.543Z",
+  "executionId": "audit_1783966943061_6bcrvu"
+}

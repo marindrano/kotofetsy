@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
+import urllib.error
+import urllib.request
+from collections import deque
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -56,7 +60,10 @@ class MadagascarTribune(NewsSource):
     )
 
     def _discover_categories(self) -> list[str]:
-        home = Fetcher.get(self._home_url, headers={"User-Agent": USER_AGENT})
+        try:
+            home = Fetcher.get(self._home_url, headers={"User-Agent": USER_AGENT})
+        except Exception:
+            return []  # homepage fetch failed — no categories this run, resume next time
         rubrique_ids = sorted(
             set(self._rubrique_re.findall(home.html_content)), key=int
         )
@@ -68,6 +75,8 @@ class MadagascarTribune(NewsSource):
             return False  # "-.html" suffix is this site's category/rubrique convention, not an article
         if "://" in href or href.startswith("/"):
             return False  # only flat relative article slugs, no external/absolute links
+        if href.startswith("_"):
+            return False  # SPIP author/keyword pages: "_Name,id_.html" — byline links, not articles
         return True
 
     def list_article_urls(self):
@@ -80,7 +89,12 @@ class MadagascarTribune(NewsSource):
                     if offset == 0
                     else f"{page_url}?debut_articles={offset}"
                 )
-                page = Fetcher.get(fetch_url, headers={"User-Agent": USER_AGENT})
+                try:
+                    page = Fetcher.get(fetch_url, headers={"User-Agent": USER_AGENT})
+                except Exception:
+                    # Transient fetch failure (e.g. curl HTTP/2 error 16) — skip the rest
+                    # of this category and move on. Resumable: next run re-walks it.
+                    break
                 page_url = (
                     page.url
                 )  # first fetch may redirect rubriqueN -> canonical pretty URL
@@ -140,9 +154,6 @@ class LaGazetteDeLaGrandeIle(NewsSource):
 
 class FreeNews(NewsSource):
     source_name = "freenews-mg"
-    # ponytail: no sitemap on this site — seeding from the homepage only for now,
-    # same gap as Tribune had before its category+pagination crawl was built.
-    _seed_url = "https://www.freenews.mg/"
     selectors = SiteSelectors(
         title="h1",
         body="article p",
@@ -151,34 +162,78 @@ class FreeNews(NewsSource):
         published_date_format="french",
         category="a[href*='/categories/']",
     )
+    # WordPress, no sitemap, but an open REST API — the real paginated archive (~3200 posts).
+    # The visible /category/ pages soft-404 (HTTP 200 past the end) and use messy accented
+    # slugs, so the API is the reliable "paginate for real" path. We ask only for `link`
+    # and still fetch each article page in parse_article (uniform with other providers);
+    # ponytail ceiling: the API already carries content.rendered — consume it directly if
+    # the extra per-article fetch ever becomes a problem.
+    _api = "https://www.freenews.mg/wp-json/wp/v2/posts"
 
     def list_article_urls(self):
-        page = Fetcher.get(self._seed_url, headers={"User-Agent": USER_AGENT})
-        for link in page.css("h1 a, h2 a, h3 a"):
-            href = link.attrib.get("href")
-            if not href or "/author/" in href or "/categories/" in href:
-                continue
-            yield urljoin(self._seed_url, href)
+        page = 1
+        while True:
+            api = f"{self._api}?per_page=100&page={page}&_fields=link"
+            req = urllib.request.Request(api, headers={"User-Agent": USER_AGENT})
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    posts = json.loads(resp.read())
+            except urllib.error.HTTPError as exc:
+                if exc.code == 400:  # WP's rest_post_invalid_page_number — we're past the last page
+                    break
+                raise
+            if not posts:
+                break
+            for post in posts:
+                link = post.get("link")
+                if link:
+                    yield link
+            page += 1
 
 
 class Moov(NewsSource):
     source_name = "moov-mg"
     _seed_url = "https://new.moov.mg/"
     selectors = SiteSelectors(
-        title="h2",
-        body="p",
+        title="h1",  # h2 are section subheadings on this site; the article title is the h1
+        body=".content p",
         author=None,
         published_date=None,
         published_date_format="numeric",
         category="a[href*='/actualites/']",
     )
-
+    # Moov is a JS SPA: category listing pages render client-side (empty to a static fetch)
+    # and its Strapi CMS API is locked (403), so there's no static category pagination to walk.
+    # But article pages ARE server-rendered and each links ~4 related articles, so we spider:
+    # seed from the homepage, then follow /article/ links breadth-first. Resumable across runs
+    # via seen_urls. Ceiling: coverage is limited to what's reachable via related-link chains
+    # from the seed (not guaranteed to be the whole archive), and each page is fetched twice
+    # (once here to expand the frontier, once in parse_article) — acceptable for a small site.
     def list_article_urls(self):
-        page = Fetcher.get(self._seed_url, headers={"User-Agent": USER_AGENT})
-        for link in page.css("a[href*='/article/']"):
-            href = link.attrib.get("href")
-            if href:
-                yield urljoin(self._seed_url, href)
+        queued: set[str] = set()
+        queue: deque[str] = deque()
+
+        def enqueue(href: Optional[str]) -> None:
+            if not href:
+                return
+            absolute = urljoin(self._seed_url, href)
+            if "/article/" in absolute and absolute not in queued:
+                queued.add(absolute)
+                queue.append(absolute)
+
+        home = Fetcher.get(self._seed_url, headers={"User-Agent": USER_AGENT})
+        for link in home.css("a[href*='/article/']"):
+            enqueue(link.attrib.get("href"))
+
+        while queue:
+            url = queue.popleft()
+            yield url
+            try:
+                page = Fetcher.get(url, headers={"User-Agent": USER_AGENT})
+            except Exception:
+                continue  # skip a page we can't fetch for frontier expansion; crawl() logs its own parse errors
+            for link in page.css("a[href*='/article/']"):
+                enqueue(link.attrib.get("href"))
 
 
 class MalagasyNewsMBS(NewsSource):
@@ -191,20 +246,6 @@ class MalagasyNewsMBS(NewsSource):
         published_date=None,
         published_date_format="french",
         category="a[href*='/actualites/']",
-    )
-
-
-class RadioNationaleMalagasy(NewsSource):
-    source_name = "radiomadagasikara-rnm"
-    sitemap_url = "https://www.radiomadagasikara.com/wp-sitemap.xml"
-    selectors = SiteSelectors(
-        title="h1",
-        body="div.post-content",
-        author=None,
-        published_date="span.post-date",
-        published_date_attr=None,
-        published_date_format="french",
-        category="div.post-tags a",
     )
 
 
@@ -245,7 +286,6 @@ PROVIDERS: dict[str, type[NewsSource]] = {
     "freenews-mg": FreeNews,
     "moov-mg": Moov,
     "malagasynews-mbs": MalagasyNewsMBS,
-    "radiomadagasikara-rnm": RadioNationaleMalagasy,
     "kolo-tv": KoloTV,
     "journalmadagascar": JournalMadagascar,
 }

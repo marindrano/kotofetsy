@@ -1,0 +1,56 @@
+[2026-07-13T18:42:35.091Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Scope note\n\nThis session is sandboxed to `apps/cli`, which is a **Go TUI** (Bubble Tea) that shells out to the Python crawler — not a web app with a database or React frontend. So two of the five categories you asked about (N+1 queries, React re-renders) don't have a literal target here; I've mapped them to their closest Go/TUI equivalents instead of forcing irrelevant advice. If you want the Python crawler (`apps/crawler`) reviewed too — that's where real N+1/network-caching patterns would actually live — I'd need permission to read outside `apps/cli`.\n\n## Findings (apps/cli, ~470 LOC total)\n\n### 1. O(n²) redraw cost — the closest thing to \"N+1\" here\n`tui.go:107-114` and `tui.go:380-408`. Bubble Tea calls `View()` after every single `Update()`, and every stdout line from a crawler subprocess is one `Update()` call (via `statusMsg`). Two things get recomputed from scratch on **every one of those calls**:\n\n- `viewRunning()` calls `articlesSaved(st.lines)` (tui.go:398) for **every provider**, each call doing a full `strings.HasPrefix` scan of that provider's entire line history.\n- `refreshViewport()` (tui.go:245-252) does `strings.Join(m.statuses[name].lines, \"\\n\")` — a full O(n) rebuild of the highlighted provider's content — on every new line.\n\nWith `--limit 0` (\"run until exhausted\") and a noisy provider (scrapling logs are folded into stdout, `main.go:66`), line counts can reach the thousands, so this is genuine O(L²) work over a run, not just an academic concern.\n\n**Fix** — track running state instead of rescanning:\n\n```go\ntype providerStatus struct {\n\tstate      providerState\n\tlines      []string\n\tsavedCount int          // was: recomputed via articlesSaved() every render\n\tcontent    strings.Builder // was: strings.Join(lines, \"\\n\") every render\n}\n```\n\n```go\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.savedCount++\n\t}\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(msg.line)\n\tif m.highlighted() == msg.provider {\n\t\tm.refreshViewport()\n\t}\n```\n\nThen `refreshViewport` uses `st.content.String()` directly, and `viewRunning` reads `st.savedCount` instead of calling `articlesSaved(st.lines)`. This turns both hot paths from O(n) into O(1) amortized.\n\n### 2. Unbounded memory growth\n`providerStatus.lines` (tui.go:36) accumulates every stdout line forever with no cap. Combined with `--limit 0`, a long-running crawl against a chatty provider grows both memory and (per finding 1) CPU without bound. If the full log isn't needed for anything beyond the scrollback viewport, cap it (e.g. keep last N lines, or bound by byte size) rather than retaining the entire run's output in memory.\n\n### 3. Already fine — no action needed\n- Lipgloss styles (`tui.go:278-293`) are package-level vars, not rebuilt per render — that's the \"caching\" you'd want here, already done.\n- Goroutine lifecycle in `startRun`/`runHeadless` is clean: one goroutine per provider, `cmd.Wait()` always called, no leaked pipes.\n- `q`/`ctrl+c` is blocked while `m.pending > 0` (tui.go:147), so there's no path where the program quits early while provider goroutines are still trying to `Send()`.\n\n### Not applicable here\n- **N+1 queries**: no database.\n- **React re-renders**: no React; see finding 1 for the Bubble Tea analog.\n\nIf you'd like, I can also review the Python crawler (`apps/crawler/main.py`, `base.py`, `providers.py`) — that's genuinely more likely to have HTTP-request-per-item patterns and caching opportunities worth digging into, but it's outside this session's current write/read scope.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Scope note",
+        "content": "\nThis session is sandboxed to `apps/cli`, which is a **Go TUI** (Bubble Tea) that shells out to the Python crawler — not a web app with a database or React frontend. So two of the five categories you asked about (N+1 queries, React re-renders) don't have a literal target here; I've mapped them to their closest Go/TUI equivalents instead of forcing irrelevant advice. If you want the Python crawler (`apps/crawler`) reviewed too — that's where real N+1/network-caching patterns would actually live — I'd need permission to read outside `apps/cli`.\n\n",
+        "level": 2
+      },
+      {
+        "title": "Findings (apps/cli, ~470 LOC total)",
+        "content": "\n",
+        "level": 2
+      },
+      {
+        "title": "1. O(n²) redraw cost — the closest thing to \"N+1\" here",
+        "content": "`tui.go:107-114` and `tui.go:380-408`. Bubble Tea calls `View()` after every single `Update()`, and every stdout line from a crawler subprocess is one `Update()` call (via `statusMsg`). Two things get recomputed from scratch on **every one of those calls**:\n\n- `viewRunning()` calls `articlesSaved(st.lines)` (tui.go:398) for **every provider**, each call doing a full `strings.HasPrefix` scan of that provider's entire line history.\n- `refreshViewport()` (tui.go:245-252) does `strings.Join(m.statuses[name].lines, \"\\n\")` — a full O(n) rebuild of the highlighted provider's content — on every new line.\n\nWith `--limit 0` (\"run until exhausted\") and a noisy provider (scrapling logs are folded into stdout, `main.go:66`), line counts can reach the thousands, so this is genuine O(L²) work over a run, not just an academic concern.\n\n**Fix** — track running state instead of rescanning:\n\n```go\ntype providerStatus struct {\n\tstate      providerState\n\tlines      []string\n\tsavedCount int          // was: recomputed via articlesSaved() every render\n\tcontent    strings.Builder // was: strings.Join(lines, \"\\n\") every render\n}\n```\n\n```go\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.savedCount++\n\t}\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(msg.line)\n\tif m.highlighted() == msg.provider {\n\t\tm.refreshViewport()\n\t}\n```\n\nThen `refreshViewport` uses `st.content.String()` directly, and `viewRunning` reads `st.savedCount` instead of calling `articlesSaved(st.lines)`. This turns both hot paths from O(n) into O(1) amortized.\n\n",
+        "level": 3
+      },
+      {
+        "title": "2. Unbounded memory growth",
+        "content": "`providerStatus.lines` (tui.go:36) accumulates every stdout line forever with no cap. Combined with `--limit 0`, a long-running crawl against a chatty provider grows both memory and (per finding 1) CPU without bound. If the full log isn't needed for anything beyond the scrollback viewport, cap it (e.g. keep last N lines, or bound by byte size) rather than retaining the entire run's output in memory.\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Already fine — no action needed",
+        "content": "- Lipgloss styles (`tui.go:278-293`) are package-level vars, not rebuilt per render — that's the \"caching\" you'd want here, already done.\n- Goroutine lifecycle in `startRun`/`runHeadless` is clean: one goroutine per provider, `cmd.Wait()` always called, no leaked pipes.\n- `q`/`ctrl+c` is blocked while `m.pending > 0` (tui.go:147), so there's no path where the program quits early while provider goroutines are still trying to `Send()`.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **N+1 queries**: no database.\n- **React re-renders**: no React; see finding 1 for the Bubble Tea analog.\n\nIf you'd like, I can also review the Python crawler (`apps/crawler/main.py`, `base.py`, `providers.py`) — that's genuinely more likely to have HTTP-request-per-item patterns and caching opportunities worth digging into, but it's outside this session's current write/read scope.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate      providerState\n\tlines      []string\n\tsavedCount int          // was: recomputed via articlesSaved() every render\n\tcontent    strings.Builder // was: strings.Join(lines, \"\\n\") every render\n}"
+      },
+      {
+        "language": "go",
+        "code": "case statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.savedCount++\n\t}\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(msg.line)\n\tif m.highlighted() == msg.provider {\n\t\tm.refreshViewport()\n\t}"
+      }
+    ]
+  },
+  "durationMs": 112736,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:42:35.090Z",
+  "executionId": "optimize_1783968042354_hrk2xk"
+}

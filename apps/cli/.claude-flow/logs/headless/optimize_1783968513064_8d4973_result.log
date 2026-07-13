@@ -1,0 +1,88 @@
+[2026-07-13T18:51:13.009Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "This is a small Go TUI app (`main.go` + `tui.go`, ~450 lines, using Bubble Tea) that shells out to a separate Python crawler process — not a web app with a database or React frontend. The requested checklist (N+1 queries, React re-renders, etc.) doesn't map directly, so I've translated each category to its closest Go/TUI equivalent and only report what's actually present.\n\n## 1. \"N+1 query\" equivalent — none found\nNo database or repeated network calls in this file; `runCrawler` shells out once per provider via `uv run main.py`. Not applicable here (would need to check `apps/crawler` separately if you want DB query analysis).\n\n## 2. Redundant computation / \"unnecessary re-render\" equivalent — real issue\n\n`viewRunning()` (tui.go:385-413) recomputes `articlesSaved(st.lines)` for **every provider** on **every `View()` call** — and `View()` fires on every spinner tick (~10Hz) plus every keypress, not just when a provider's lines actually changed:\n\n```go\n// tui.go:403 — rescans the full lines slice for all providers, every render\ncount := articlesSaved(st.lines)\n```\n\n```go\nfunc articlesSaved(lines []string) int {\n\tn := 0\n\tfor _, l := range lines {\n\t\tif strings.HasPrefix(l, \"  - \") {\n\t\t\tn++\n\t\t}\n\t}\n\treturn n\n}\n```\n\nFor a long crawl (especially `--limit 0`, \"run until exhausted\") this is an O(providers × lines) full rescan ~10 times a second, most of it wasted since only the currently-streaming provider's line count actually changed since the last tick.\n\n**Fix — maintain an incremental counter instead of rescanning:**\n\n```go\ntype providerStatus struct {\n\tstate providerState\n\tlines []string\n\tsaved int // incrementally maintained, avoids rescanning on every render\n}\n```\n\n```go\n// in Update(), statusMsg case:\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.saved++\n\t}\n\t...\n```\n\n```go\n// viewRunning():\ncount := st.saved // was: articlesSaved(st.lines)\n```\n\n## 3. Redundant computation — O(n²) log rebuild\n\n`refreshViewport()` (tui.go:248-255) rebuilds the **entire** joined log string from scratch every time a new line arrives for the highlighted provider:\n\n```go\nm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n```\n\nSince this runs once per incoming line for the highlighted provider, a provider that emits N lines costs O(N²) total by the end of the run (rejoining all lines each time one more is added).\n\n**Fix — accumulate with `strings.Builder` instead of re-joining a slice:**\n\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string        // keep if still needed elsewhere (e.g. articlesSaved before fix #2)\n\tcontent strings.Builder // O(1) amortized append; String() is O(1) (zero-copy since Go 1.10)\n}\n```\n\n```go\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(msg.line)\n\t...\n```\n\n```go\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}\n```\n\n## 4. Memory growth — unbounded log retention\n\n`st.lines = append(st.lines, msg.line)` (tui.go:113) never caps growth. With `--limit 0` (\"run until exhausted\") a noisy provider can accumulate an unbounded number of lines held in memory for the life of the process. Not a leak in the strict sense (it's freed on exit), but unbounded resident memory during a long run.\n\n**Suggestion:** cap retained lines per provider (e.g. keep last 2000) if only recent output needs to stay visible in the viewport:\n\n```go\nconst maxLinesPerProvider = 2000\n\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLinesPerProvider {\n\tst.lines = st.lines[len(st.lines)-maxLinesPerProvider:]\n}\n```\n\n## 5. Caching opportunities\nNothing meaningfully cacheable beyond #1/#2 above — `providers` is a static slice computed once, styles (`lipgloss.NewStyle()`) are already package-level vars, not rebuilt per render.\n\n## Not applicable\n- **N+1 queries** — no DB/ORM in this app.\n- **React re-renders** — no React; closest analog covered in #2.\n\nWant me to apply fixes #2 and #3 (the two with measurable impact — #4 is a judgment call depending on whether you need full scrollback)?\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. \"N+1 query\" equivalent — none found",
+        "content": "No database or repeated network calls in this file; `runCrawler` shells out once per provider via `uv run main.py`. Not applicable here (would need to check `apps/crawler` separately if you want DB query analysis).\n\n",
+        "level": 2
+      },
+      {
+        "title": "2. Redundant computation / \"unnecessary re-render\" equivalent — real issue",
+        "content": "\n`viewRunning()` (tui.go:385-413) recomputes `articlesSaved(st.lines)` for **every provider** on **every `View()` call** — and `View()` fires on every spinner tick (~10Hz) plus every keypress, not just when a provider's lines actually changed:\n\n```go\n// tui.go:403 — rescans the full lines slice for all providers, every render\ncount := articlesSaved(st.lines)\n```\n\n```go\nfunc articlesSaved(lines []string) int {\n\tn := 0\n\tfor _, l := range lines {\n\t\tif strings.HasPrefix(l, \"  - \") {\n\t\t\tn++\n\t\t}\n\t}\n\treturn n\n}\n```\n\nFor a long crawl (especially `--limit 0`, \"run until exhausted\") this is an O(providers × lines) full rescan ~10 times a second, most of it wasted since only the currently-streaming provider's line count actually changed since the last tick.\n\n**Fix — maintain an incremental counter instead of rescanning:**\n\n```go\ntype providerStatus struct {\n\tstate providerState\n\tlines []string\n\tsaved int // incrementally maintained, avoids rescanning on every render\n}\n```\n\n```go\n// in Update(), statusMsg case:\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.saved++\n\t}\n\t...\n```\n\n```go\n// viewRunning():\ncount := st.saved // was: articlesSaved(st.lines)\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "3. Redundant computation — O(n²) log rebuild",
+        "content": "\n`refreshViewport()` (tui.go:248-255) rebuilds the **entire** joined log string from scratch every time a new line arrives for the highlighted provider:\n\n```go\nm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n```\n\nSince this runs once per incoming line for the highlighted provider, a provider that emits N lines costs O(N²) total by the end of the run (rejoining all lines each time one more is added).\n\n**Fix — accumulate with `strings.Builder` instead of re-joining a slice:**\n\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string        // keep if still needed elsewhere (e.g. articlesSaved before fix #2)\n\tcontent strings.Builder // O(1) amortized append; String() is O(1) (zero-copy since Go 1.10)\n}\n```\n\n```go\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(msg.line)\n\t...\n```\n\n```go\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. Memory growth — unbounded log retention",
+        "content": "\n`st.lines = append(st.lines, msg.line)` (tui.go:113) never caps growth. With `--limit 0` (\"run until exhausted\") a noisy provider can accumulate an unbounded number of lines held in memory for the life of the process. Not a leak in the strict sense (it's freed on exit), but unbounded resident memory during a long run.\n\n**Suggestion:** cap retained lines per provider (e.g. keep last 2000) if only recent output needs to stay visible in the viewport:\n\n```go\nconst maxLinesPerProvider = 2000\n\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLinesPerProvider {\n\tst.lines = st.lines[len(st.lines)-maxLinesPerProvider:]\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. Caching opportunities",
+        "content": "Nothing meaningfully cacheable beyond #1/#2 above — `providers` is a static slice computed once, styles (`lipgloss.NewStyle()`) are already package-level vars, not rebuilt per render.\n\n",
+        "level": 2
+      },
+      {
+        "title": "Not applicable",
+        "content": "- **N+1 queries** — no DB/ORM in this app.\n- **React re-renders** — no React; closest analog covered in #2.\n\nWant me to apply fixes #2 and #3 (the two with measurable impact — #4 is a judgment call depending on whether you need full scrollback)?",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "// tui.go:403 — rescans the full lines slice for all providers, every render\ncount := articlesSaved(st.lines)"
+      },
+      {
+        "language": "go",
+        "code": "func articlesSaved(lines []string) int {\n\tn := 0\n\tfor _, l := range lines {\n\t\tif strings.HasPrefix(l, \"  - \") {\n\t\t\tn++\n\t\t}\n\t}\n\treturn n\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate providerState\n\tlines []string\n\tsaved int // incrementally maintained, avoids rescanning on every render\n}"
+      },
+      {
+        "language": "go",
+        "code": "// in Update(), statusMsg case:\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.saved++\n\t}\n\t..."
+      },
+      {
+        "language": "go",
+        "code": "// viewRunning():\ncount := st.saved // was: articlesSaved(st.lines)"
+      },
+      {
+        "language": "go",
+        "code": "m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate   providerState\n\tlines   []string        // keep if still needed elsewhere (e.g. articlesSaved before fix #2)\n\tcontent strings.Builder // O(1) amortized append; String() is O(1) (zero-copy since Go 1.10)\n}"
+      },
+      {
+        "language": "go",
+        "code": "case statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(msg.line)\n\t..."
+      },
+      {
+        "language": "go",
+        "code": "func (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}"
+      },
+      {
+        "language": "go",
+        "code": "const maxLinesPerProvider = 2000\n\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLinesPerProvider {\n\tst.lines = st.lines[len(st.lines)-maxLinesPerProvider:]\n}"
+      }
+    ]
+  },
+  "durationMs": 159944,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:51:13.008Z",
+  "executionId": "optimize_1783968513064_8d4973"
+}

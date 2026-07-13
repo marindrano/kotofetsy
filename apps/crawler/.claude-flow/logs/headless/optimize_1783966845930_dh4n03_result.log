@@ -1,0 +1,92 @@
+[2026-07-13T18:22:32.842Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Findings\n\nThis is a Python news-crawler (no React/frontend here — `apps/crawler` is `scrapling`-based scraping code), so I'm mapping the requested categories onto their closest real equivalents in this codebase.\n\n### 1. \"N+1\"-equivalent: full state file rewritten + re-sorted on every single article\n\n`base.py:283-322` — `crawl()` calls `self._save_state(state)` **after every article**, and each call does `state[\"seen_urls\"] = sorted(seen)` before serializing the whole dict to JSON and doing an atomic rename.\n\n```python\n# base.py:303, 311\nstate[\"seen_urls\"] = sorted(seen)   # O(n log n) sort of ALL seen URLs, every article\nself._save_state(state)             # O(n) full JSON write, every article\n```\n\nI confirmed this is already a real cost, not theoretical — `state/malagasynews-mbs.json` has ~985 entries at 137KB, `lexpress-mg.json`/`lgdi-madagascar.json` are ~100KB each. A crawl that saves `n` new articles against `m` already-seen URLs currently does `O(n·(n+m)·log(n+m))` total work just for state persistence.\n\n**Fix** — keep the crash-safety guarantee (comment at `base.py:274-281` explains why they checkpoint every article) but drop the per-save sort, and/or move to an append-only log instead of full rewrite:\n\n```python\ndef _save_state(self, state: dict) -> None:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    tmp_path = self._state_path.with_suffix(\".json.tmp\")\n    tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n    tmp_path.replace(self._state_path)\n\n# in crawl():\nseen.add(url)\nstate[\"seen_urls\"] = list(seen)   # no sort — order isn't semantically meaningful\nself._save_state(state)\n```\n\nThat alone removes the `log(n)` factor. If you want to actually kill the `O(n)`-per-save cost (not just its constant), switch to an append-only `seen_urls.jsonl` (one `f.write(url + \"\\n\")` per save — O(1)) and reconstruct the set with `set(f.read().splitlines())` at load time; same crash-safety, no full rewrite.\n\n### 2. Redundant computation: text extracted twice per paragraph\n\n`base.py:183-187`:\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← same call runs again\n)\n```\n\n`get_all_text(strip=True)` walks the DOM subtree and runs on every `<p>` **twice** — once in the filter, once in the yield. Fix:\n\n```python\nbody = \"\\n\\n\".join(\n    text for text in (p.get_all_text(strip=True) for p in page.css(s.body)) if text\n)\n```\n\n### 3. Repeated `mkdir()` syscalls that only need to run once per process\n\n`base.py:146` (`_save_state`), `base.py:152` (`_log`), `base.py:158` (`_append_article`) each call `.parent.mkdir(parents=True, exist_ok=True)` — and all three are on the hot per-article path, so that's 3 syscalls/article just re-confirming a directory that was already created on run #1. Cheap fix: create the three directories once in `crawl()` (or `__init__`) instead of on every write:\n\n```python\ndef crawl(self, limit: int = 10, on_save=None) -> list[Article]:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    self._log_path.parent.mkdir(parents=True, exist_ok=True)\n    self._data_path.parent.mkdir(parents=True, exist_ok=True)\n    ...\n```\nthen drop the `mkdir` calls from `_save_state`/`_log`/`_append_article`.\n\n### 4. Unbounded growth (\"memory/disk leak\" analog): `seen_urls` never pruned\n\n`seen_urls` only grows, forever, across every run (`base.py:283`, `303`, `308`). Combined with finding #1, every provider's state file — and the per-article write cost — grows monotonically for the life of the project. Not wrong functionally (dedup must be permanent), but worth flagging: if a provider accumulates tens of thousands of URLs, load (`_load_state`, `base.py:138-141`) and every subsequent save become the dominant per-run cost. If this becomes a real bottleneck, move `seen_urls` to a proper index (SQLite `PRIMARY KEY` table, one `INSERT` per URL) instead of a JSON array.\n\n### 5. Minor: `O(n)` pop from a list used as a queue\n\n`base.py:70-72`, `discover_sitemap_urls`:\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list\n```\n\nFine at Midi's ~118 sub-sitemaps, but should be a `collections.deque` with `popleft()` for O(1) — `deque` is already imported and used in `providers.py` for `Moov`.\n\n### 6. Minor: date regexes recompiled implicitly on every parse\n\n`base.py:93,97,109` use `re.search(r\"...\")` with a literal pattern inline. Python's `re` module caches ~512 compiled patterns internally so this isn't a real bottleneck today, but for consistency with `MadagascarTribune._rubrique_re` (`providers.py:56`, precompiled at class level), hoist these to module-level `re.compile(...)` constants for clarity.\n\n### Not applicable here\n- **React re-renders / component caching**: no frontend code in this directory — nothing to check.\n- **Classic N+1 DB query pattern**: there's no ORM/DB here; the closest analog is #1 above (per-record full-file rewrite), which is the one worth fixing.\n- **HTTP caching opportunities**: `Moov.list_article_urls` (`providers.py:220-228`) already double-fetches each page by design (documented tradeoff, acceptable for a small site) — not flagging as a bug, just noting it's the one spot where response caching across the frontier-expansion fetch and the `parse_article` fetch could help if Moov's article count grows.\n\n**Priority**: fix #1 and #2 first — #1 is the only one with measured, compounding cost (confirmed via the existing state file sizes), #2 is a trivial one-line fix with no tradeoffs. #3–#6 are minor/defensive.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Findings",
+        "content": "\nThis is a Python news-crawler (no React/frontend here — `apps/crawler` is `scrapling`-based scraping code), so I'm mapping the requested categories onto their closest real equivalents in this codebase.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. \"N+1\"-equivalent: full state file rewritten + re-sorted on every single article",
+        "content": "\n`base.py:283-322` — `crawl()` calls `self._save_state(state)` **after every article**, and each call does `state[\"seen_urls\"] = sorted(seen)` before serializing the whole dict to JSON and doing an atomic rename.\n\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "base.py:303, 311",
+        "content": "state[\"seen_urls\"] = sorted(seen)   # O(n log n) sort of ALL seen URLs, every article\nself._save_state(state)             # O(n) full JSON write, every article\n```\n\nI confirmed this is already a real cost, not theoretical — `state/malagasynews-mbs.json` has ~985 entries at 137KB, `lexpress-mg.json`/`lgdi-madagascar.json` are ~100KB each. A crawl that saves `n` new articles against `m` already-seen URLs currently does `O(n·(n+m)·log(n+m))` total work just for state persistence.\n\n**Fix** — keep the crash-safety guarantee (comment at `base.py:274-281` explains why they checkpoint every article) but drop the per-save sort, and/or move to an append-only log instead of full rewrite:\n\n```python\ndef _save_state(self, state: dict) -> None:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    tmp_path = self._state_path.with_suffix(\".json.tmp\")\n    tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n    tmp_path.replace(self._state_path)\n\n",
+        "level": 1
+      },
+      {
+        "title": "in crawl():",
+        "content": "seen.add(url)\nstate[\"seen_urls\"] = list(seen)   # no sort — order isn't semantically meaningful\nself._save_state(state)\n```\n\nThat alone removes the `log(n)` factor. If you want to actually kill the `O(n)`-per-save cost (not just its constant), switch to an append-only `seen_urls.jsonl` (one `f.write(url + \"\\n\")` per save — O(1)) and reconstruct the set with `set(f.read().splitlines())` at load time; same crash-safety, no full rewrite.\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Redundant computation: text extracted twice per paragraph",
+        "content": "\n`base.py:183-187`:\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← same call runs again\n)\n```\n\n`get_all_text(strip=True)` walks the DOM subtree and runs on every `<p>` **twice** — once in the filter, once in the yield. Fix:\n\n```python\nbody = \"\\n\\n\".join(\n    text for text in (p.get_all_text(strip=True) for p in page.css(s.body)) if text\n)\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Repeated `mkdir()` syscalls that only need to run once per process",
+        "content": "\n`base.py:146` (`_save_state`), `base.py:152` (`_log`), `base.py:158` (`_append_article`) each call `.parent.mkdir(parents=True, exist_ok=True)` — and all three are on the hot per-article path, so that's 3 syscalls/article just re-confirming a directory that was already created on run #1. Cheap fix: create the three directories once in `crawl()` (or `__init__`) instead of on every write:\n\n```python\ndef crawl(self, limit: int = 10, on_save=None) -> list[Article]:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    self._log_path.parent.mkdir(parents=True, exist_ok=True)\n    self._data_path.parent.mkdir(parents=True, exist_ok=True)\n    ...\n```\nthen drop the `mkdir` calls from `_save_state`/`_log`/`_append_article`.\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. Unbounded growth (\"memory/disk leak\" analog): `seen_urls` never pruned",
+        "content": "\n`seen_urls` only grows, forever, across every run (`base.py:283`, `303`, `308`). Combined with finding #1, every provider's state file — and the per-article write cost — grows monotonically for the life of the project. Not wrong functionally (dedup must be permanent), but worth flagging: if a provider accumulates tens of thousands of URLs, load (`_load_state`, `base.py:138-141`) and every subsequent save become the dominant per-run cost. If this becomes a real bottleneck, move `seen_urls` to a proper index (SQLite `PRIMARY KEY` table, one `INSERT` per URL) instead of a JSON array.\n\n",
+        "level": 3
+      },
+      {
+        "title": "5. Minor: `O(n)` pop from a list used as a queue",
+        "content": "\n`base.py:70-72`, `discover_sitemap_urls`:\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list\n```\n\nFine at Midi's ~118 sub-sitemaps, but should be a `collections.deque` with `popleft()` for O(1) — `deque` is already imported and used in `providers.py` for `Moov`.\n\n",
+        "level": 3
+      },
+      {
+        "title": "6. Minor: date regexes recompiled implicitly on every parse",
+        "content": "\n`base.py:93,97,109` use `re.search(r\"...\")` with a literal pattern inline. Python's `re` module caches ~512 compiled patterns internally so this isn't a real bottleneck today, but for consistency with `MadagascarTribune._rubrique_re` (`providers.py:56`, precompiled at class level), hoist these to module-level `re.compile(...)` constants for clarity.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **React re-renders / component caching**: no frontend code in this directory — nothing to check.\n- **Classic N+1 DB query pattern**: there's no ORM/DB here; the closest analog is #1 above (per-record full-file rewrite), which is the one worth fixing.\n- **HTTP caching opportunities**: `Moov.list_article_urls` (`providers.py:220-228`) already double-fetches each page by design (documented tradeoff, acceptable for a small site) — not flagging as a bug, just noting it's the one spot where response caching across the frontier-expansion fetch and the `parse_article` fetch could help if Moov's article count grows.\n\n**Priority**: fix #1 and #2 first — #1 is the only one with measured, compounding cost (confirmed via the existing state file sizes), #2 is a trivial one-line fix with no tradeoffs. #3–#6 are minor/defensive.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "# base.py:303, 311\nstate[\"seen_urls\"] = sorted(seen)   # O(n log n) sort of ALL seen URLs, every article\nself._save_state(state)             # O(n) full JSON write, every article"
+      },
+      {
+        "language": "python",
+        "code": "def _save_state(self, state: dict) -> None:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    tmp_path = self._state_path.with_suffix(\".json.tmp\")\n    tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding=\"utf-8\")\n    tmp_path.replace(self._state_path)\n\n# in crawl():\nseen.add(url)\nstate[\"seen_urls\"] = list(seen)   # no sort — order isn't semantically meaningful\nself._save_state(state)"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← same call runs again\n)"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    text for text in (p.get_all_text(strip=True) for p in page.css(s.body)) if text\n)"
+      },
+      {
+        "language": "python",
+        "code": "def crawl(self, limit: int = 10, on_save=None) -> list[Article]:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    self._log_path.parent.mkdir(parents=True, exist_ok=True)\n    self._data_path.parent.mkdir(parents=True, exist_ok=True)\n    ..."
+      },
+      {
+        "language": "python",
+        "code": "to_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list"
+      }
+    ]
+  },
+  "durationMs": 106912,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:22:32.842Z",
+  "executionId": "optimize_1783966845930_dh4n03"
+}

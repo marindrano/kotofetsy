@@ -1,0 +1,17 @@
+[2026-07-13T18:19:18.161Z] RESULT
+============================================================
+{
+  "success": false,
+  "output": "API Error: Connection closed mid-response. The response above may be incomplete.\n",
+  "parsedOutput": {
+    "sections": [],
+    "codeBlocks": []
+  },
+  "durationMs": 978761,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:19:18.161Z",
+  "executionId": "optimize_1783965779400_5dgjq2",
+  "error": "Execution timed out after 600000ms"
+}

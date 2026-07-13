@@ -1,0 +1,90 @@
+[2026-07-13T18:38:39.307Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "This is a synchronous Python crawler (Scrapling + urllib), not a React/DB-backed app — so I'm mapping your four categories to their actual analogs here: **N+1 → per-article HTTP fetch patterns**, **re-renders → not applicable (no frontend)**, plus real caching/memory/redundant-computation issues I found.\n\n## 1. N+1 fetch patterns (HTTP analog of N+1 queries)\n\n**Moov fetches every article page twice** — once during frontier discovery, once again in `parse_article` (`providers.py:224-236`, `base.py:175`):\n\n```python\n# providers.py — list_article_urls() fetches to expand the frontier...\npage = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\nfor link in page.css(\"a[href*='/article/']\"):\n    enqueue(link.attrib.get(\"href\"))\n# ...then base.py's parse_article() fetches the SAME url again to parse it\n```\nFix: have `list_article_urls()` yield `(url, page)` tuples (or cache the fetched page keyed by URL) so `parse_article` can reuse it instead of re-fetching. Halves Moov's request count.\n\n**All crawling is strictly sequential** (`base.py:288`, `providers.py:85-97, 228-236`) — one blocking HTTP round-trip per article, no concurrency, even though this is a pure I/O-bound workload. For providers with hundreds/thousands of articles this dominates wall-clock time. Fix: fetch a batch of pending URLs concurrently with a thread pool, then feed results into the existing sequential state-save loop (keep saves sequential to preserve the \"lose at most 1 article on crash\" guarantee):\n\n```python\nfrom concurrent.futures import ThreadPoolExecutor\n\ndef crawl(self, limit=10, on_save=None, max_workers=8):\n    ...\n    urls = (u for u in self.list_article_urls() if u not in seen)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        for url, article in pool.map(lambda u: (u, self._safe_parse(u)), urls):\n            # existing save/checkpoint logic, unchanged\n```\n\n## 2. Redundant computations\n\n**`sorted(seen)` runs on every single article save** (`base.py:303, 311`), not once at the end:\n\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)   # re-sorts the WHOLE set, every article\nself._save_state(state)\n```\nFor a long-running provider like Midi (118 sub-sitemaps, years of history), `seen` can be tens of thousands of URLs — sorting it from scratch after every single new article is O(n log n) × n articles this run. Fix: keep `seen_urls` as an already-sorted list and `bisect.insort` the single new URL instead of re-sorting the whole collection:\n\n```python\nimport bisect\nseen_list = state.setdefault(\"seen_urls\", [])\nbisect.insort(seen_list, url)   # O(n) insert, not O(n log n) full sort\n```\n\n**Body text extracted twice per paragraph** (`base.py:183-187`):\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← called again here\n)\n```\nFix:\n```python\nparagraphs = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(text for text in paragraphs if text)\n```\n\n**Date regexes recompiled on every call** (`base.py:93, 97, 109`) — `re.search` with a string pattern re-compiles (Python's internal regex cache mostly absorbs this, but it's still a dict lookup + pattern object churn per article). Fix: hoist to module-level `re.compile(...)` constants next to `FRENCH_MONTHS`.\n\n## 3. Caching opportunities\n\n**Path properties rebuilt on every access** (`base.py:126-136`) — `_state_path`, `_log_path`, `_data_path` recompute `Path` objects/f-strings each call, and `_state_path` alone is accessed twice per article (`_load_state` + `_save_state`) plus once per log line. Fix: compute once in `__init__` (or `functools.cached_property`):\n\n```python\nfrom functools import cached_property\n\n@cached_property\ndef _state_path(self) -> Path:\n    return STATE_DIR / f\"{self.source_name}.json\"\n```\n\n**`MadagascarTribune._discover_categories()`** re-fetches and re-parses the homepage on every `crawl()` invocation with no cross-run caching — reasonable for freshness, but if `main.py` ever runs `all` providers in a tight loop/cron, consider a short TTL cache on the category list to avoid a redundant homepage fetch when re-running the same provider back-to-back.\n\n## 4. Memory-accumulation concerns (no real \"leaks\" — it's a short-lived script)\n\n**`crawl()` accumulates the entire run's `Article` objects in `saved: list[Article]`** (`base.py:284, 309`) and returns them all at once, and **`seen` loads the full historical URL set into memory** every run (`base.py:283`). For `--limit 0` (unlimited) on a large archive, both grow unbounded for the run's duration. Since `on_save` already streams progress and `_append_article` already persists incrementally, the returned `saved` list is only used for `len(articles)` in `main.py:25` — it doesn't need to hold full `Article` objects:\n\n```python\n# main.py only needs the count — track it instead of collecting objects\ncount = 0\ndef on_save(a):\n    nonlocal count\n    count += 1\n    print(f\"  - {a.title!r} ({a.published_date})\", flush=True)\nsource.crawl(limit=args.limit, on_save=on_save)\nprint(f\"got {count} new articles this run\", flush=True)\n```\n\n## 5. React re-renders\n\nNot applicable — this app has no frontend (no `.tsx`/`.jsx` files found in `apps/crawler`). If you meant a different app in the monorepo, point me at it and I'll redo this pass there.\n\n---\n**Priority order**: fix the `sorted(seen)` per-article resort first (cheapest fix, biggest win as history grows), then concurrent fetching (biggest wall-clock win), then the Moov double-fetch and double text-extraction.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. N+1 fetch patterns (HTTP analog of N+1 queries)",
+        "content": "\n**Moov fetches every article page twice** — once during frontier discovery, once again in `parse_article` (`providers.py:224-236`, `base.py:175`):\n\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "providers.py — list_article_urls() fetches to expand the frontier...",
+        "content": "page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\nfor link in page.css(\"a[href*='/article/']\"):\n    enqueue(link.attrib.get(\"href\"))\n",
+        "level": 1
+      },
+      {
+        "title": "...then base.py's parse_article() fetches the SAME url again to parse it",
+        "content": "```\nFix: have `list_article_urls()` yield `(url, page)` tuples (or cache the fetched page keyed by URL) so `parse_article` can reuse it instead of re-fetching. Halves Moov's request count.\n\n**All crawling is strictly sequential** (`base.py:288`, `providers.py:85-97, 228-236`) — one blocking HTTP round-trip per article, no concurrency, even though this is a pure I/O-bound workload. For providers with hundreds/thousands of articles this dominates wall-clock time. Fix: fetch a batch of pending URLs concurrently with a thread pool, then feed results into the existing sequential state-save loop (keep saves sequential to preserve the \"lose at most 1 article on crash\" guarantee):\n\n```python\nfrom concurrent.futures import ThreadPoolExecutor\n\ndef crawl(self, limit=10, on_save=None, max_workers=8):\n    ...\n    urls = (u for u in self.list_article_urls() if u not in seen)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        for url, article in pool.map(lambda u: (u, self._safe_parse(u)), urls):\n            # existing save/checkpoint logic, unchanged\n```\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Redundant computations",
+        "content": "\n**`sorted(seen)` runs on every single article save** (`base.py:303, 311`), not once at the end:\n\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)   # re-sorts the WHOLE set, every article\nself._save_state(state)\n```\nFor a long-running provider like Midi (118 sub-sitemaps, years of history), `seen` can be tens of thousands of URLs — sorting it from scratch after every single new article is O(n log n) × n articles this run. Fix: keep `seen_urls` as an already-sorted list and `bisect.insort` the single new URL instead of re-sorting the whole collection:\n\n```python\nimport bisect\nseen_list = state.setdefault(\"seen_urls\", [])\nbisect.insort(seen_list, url)   # O(n) insert, not O(n log n) full sort\n```\n\n**Body text extracted twice per paragraph** (`base.py:183-187`):\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← called again here\n)\n```\nFix:\n```python\nparagraphs = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(text for text in paragraphs if text)\n```\n\n**Date regexes recompiled on every call** (`base.py:93, 97, 109`) — `re.search` with a string pattern re-compiles (Python's internal regex cache mostly absorbs this, but it's still a dict lookup + pattern object churn per article). Fix: hoist to module-level `re.compile(...)` constants next to `FRENCH_MONTHS`.\n\n",
+        "level": 2
+      },
+      {
+        "title": "3. Caching opportunities",
+        "content": "\n**Path properties rebuilt on every access** (`base.py:126-136`) — `_state_path`, `_log_path`, `_data_path` recompute `Path` objects/f-strings each call, and `_state_path` alone is accessed twice per article (`_load_state` + `_save_state`) plus once per log line. Fix: compute once in `__init__` (or `functools.cached_property`):\n\n```python\nfrom functools import cached_property\n\n@cached_property\ndef _state_path(self) -> Path:\n    return STATE_DIR / f\"{self.source_name}.json\"\n```\n\n**`MadagascarTribune._discover_categories()`** re-fetches and re-parses the homepage on every `crawl()` invocation with no cross-run caching — reasonable for freshness, but if `main.py` ever runs `all` providers in a tight loop/cron, consider a short TTL cache on the category list to avoid a redundant homepage fetch when re-running the same provider back-to-back.\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. Memory-accumulation concerns (no real \"leaks\" — it's a short-lived script)",
+        "content": "\n**`crawl()` accumulates the entire run's `Article` objects in `saved: list[Article]`** (`base.py:284, 309`) and returns them all at once, and **`seen` loads the full historical URL set into memory** every run (`base.py:283`). For `--limit 0` (unlimited) on a large archive, both grow unbounded for the run's duration. Since `on_save` already streams progress and `_append_article` already persists incrementally, the returned `saved` list is only used for `len(articles)` in `main.py:25` — it doesn't need to hold full `Article` objects:\n\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "main.py only needs the count — track it instead of collecting objects",
+        "content": "count = 0\ndef on_save(a):\n    nonlocal count\n    count += 1\n    print(f\"  - {a.title!r} ({a.published_date})\", flush=True)\nsource.crawl(limit=args.limit, on_save=on_save)\nprint(f\"got {count} new articles this run\", flush=True)\n```\n\n",
+        "level": 1
+      },
+      {
+        "title": "5. React re-renders",
+        "content": "Not applicable — this app has no frontend (no `.tsx`/`.jsx` files found in `apps/crawler`). If you meant a different app in the monorepo, point me at it and I'll redo this pass there.\n\n---\n**Priority order**: fix the `sorted(seen)` per-article resort first (cheapest fix, biggest win as history grows), then concurrent fetching (biggest wall-clock win), then the Moov double-fetch and double text-extraction.",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "# providers.py — list_article_urls() fetches to expand the frontier...\npage = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\nfor link in page.css(\"a[href*='/article/']\"):\n    enqueue(link.attrib.get(\"href\"))\n# ...then base.py's parse_article() fetches the SAME url again to parse it"
+      },
+      {
+        "language": "python",
+        "code": "from concurrent.futures import ThreadPoolExecutor\n\ndef crawl(self, limit=10, on_save=None, max_workers=8):\n    ...\n    urls = (u for u in self.list_article_urls() if u not in seen)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        for url, article in pool.map(lambda u: (u, self._safe_parse(u)), urls):\n            # existing save/checkpoint logic, unchanged"
+      },
+      {
+        "language": "python",
+        "code": "seen.add(url)\nstate[\"seen_urls\"] = sorted(seen)   # re-sorts the WHOLE set, every article\nself._save_state(state)"
+      },
+      {
+        "language": "python",
+        "code": "import bisect\nseen_list = state.setdefault(\"seen_urls\", [])\nbisect.insort(seen_list, url)   # O(n) insert, not O(n log n) full sort"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← called again here\n)"
+      },
+      {
+        "language": "python",
+        "code": "paragraphs = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(text for text in paragraphs if text)"
+      },
+      {
+        "language": "python",
+        "code": "from functools import cached_property\n\n@cached_property\ndef _state_path(self) -> Path:\n    return STATE_DIR / f\"{self.source_name}.json\""
+      },
+      {
+        "language": "python",
+        "code": "# main.py only needs the count — track it instead of collecting objects\ncount = 0\ndef on_save(a):\n    nonlocal count\n    count += 1\n    print(f\"  - {a.title!r} ({a.published_date})\", flush=True)\nsource.crawl(limit=args.limit, on_save=on_save)\nprint(f\"got {count} new articles this run\", flush=True)"
+      }
+    ]
+  },
+  "durationMs": 279920,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:38:39.306Z",
+  "executionId": "optimize_1783967639386_vhcsj6"
+}

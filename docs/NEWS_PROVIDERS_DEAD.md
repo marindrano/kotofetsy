@@ -17,8 +17,9 @@ Sources that were researched as candidates but are **not** wired into the crawle
 | MadOnline | unverified — no confirmed live URL found | French | Site run by an association of independent Malagasy journalists | **Not started** — no URL to even test |
 | InfoKmada | unverified — no confirmed live URL found | Malagasy (video-focused) | Video-news outlet in Malagasy | **Not started** — no URL to even test |
 | Agence Malagasy de Presse | unverified — no confirmed live URL found | French | National news agency (Antananarivo) — politics, economy, society, culture | **Not started** — no URL to even test |
+| Radio Nationale Malagasy (RNM) | https://www.radiomadagasikara.com/ | Malagasy, French | State/public radio station's news site, founded 1931 | **Not usable** — `wp-sitemap.xml` serves unreplaced WordPress radio-theme demo content (`Rock Star Quote`, `Meet & Greet Session`, ...), body text is literal `Lorem ipsum...`, author `Robert Parker`, dates from 2017 — confirmed by direct fetch, not a scraper bug |
 
 ## Notes
 
-- 10 of these were actually checked and found dead/unreachable/unusable; 3 (MadOnline, InfoKmada, Agence Malagasy de Presse) were never confirmed to have a live URL at all.
+- 11 of these were actually checked and found dead/unreachable/unusable; 3 (MadOnline, InfoKmada, Agence Malagasy de Presse) were never confirmed to have a live URL at all.
 - Domain status can change — re-verify periodically rather than treating "Dead" as permanent.

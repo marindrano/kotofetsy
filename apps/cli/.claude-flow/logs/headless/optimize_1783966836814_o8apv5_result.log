@@ -1,0 +1,59 @@
+[2026-07-13T18:22:23.066Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Performance Analysis — `apps/cli` (Go/Bubble Tea TUI)\n\nNote: this directory is a Go TUI (`main.go`, `tui.go`) that shells out to the Python crawler — there's no database and no React here, so N+1 queries and React re-renders don't apply directly. I also don't have read access to `apps/crawler` in this session (permission wasn't granted), so this covers only the Go code. The Bubble Tea analog of \"unnecessary re-render\" is real here, though — `View()` fires on every `tea.Msg`, including a spinner tick roughly every 100ms.\n\n### 1. O(n) rescan on every render tick (redundant computation)\n`tui.go:398` — `articlesSaved(st.lines)` linearly rescans **every accumulated log line** for **every provider**, and it's called from `viewRunning()`, which runs on every single `Update`/`View` cycle (every spinner tick, ~10×/sec, times N providers, times however many lines have accumulated).\n\n```go\n// current — tui.go:360-368, called every View()\nfunc articlesSaved(lines []string) int {\n\tn := 0\n\tfor _, l := range lines {\n\t\tif strings.HasPrefix(l, \"  - \") {\n\t\t\tn++\n\t\t}\n\t}\n\treturn n\n}\n```\n\nFix: track the count incrementally where lines are appended, instead of rescanning.\n\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tsavedCt int // maintained incrementally\n}\n\n// in Update(), statusMsg case:\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.savedCt++\n\t}\n\t...\n\n// viewRunning():\ncount := st.savedCt // no rescan\n```\n\n### 2. O(n²) string rebuild in the viewport (redundant computation)\n`tui.go:245-252` — `refreshViewport` calls `strings.Join(m.statuses[name].lines, \"\\n\")` on **every new line**, rebuilding the entire accumulated string from scratch each time. For a provider that emits N lines over a run, that's O(N²) total work just to keep the viewport current.\n\n```go\n// current\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n\tm.vp.GotoBottom()\n}\n```\n\nFix: cache the joined string per provider and append incrementally instead of rejoining on each new line.\n\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tcontent strings.Builder // cached, appended to incrementally\n}\n\n// statusMsg case in Update():\nst.lines = append(st.lines, msg.line)\nif st.content.Len() > 0 {\n\tst.content.WriteByte('\\n')\n}\nst.content.WriteString(msg.line)\n\n// refreshViewport becomes O(1) per call:\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}\n```\n\n### 3. Unbounded memory growth for long/unlimited crawls\n`tui.go:110` / `120` — `st.lines` grows without any cap. With `--limit 0` (\"run until exhausted\") across 11 providers, this can retain arbitrarily large amounts of log text for the life of the process, and it directly feeds items #1 and #2 above (each getting slower as the run progresses — effectively a growing hot loop). Not a leak in the Go-GC sense (nothing is unreachable), but it's unbounded retention that degrades over time.\n\nFix: cap what's retained for display (e.g., keep only the last ~500 lines in a ring buffer for the viewport) while keeping `savedCt` (from fix #1) as the authoritative total count, since that's all the UI actually needs.\n\n### 4. Minor: `bufio.Scanner` default line-length ceiling\n`main.go:72-75` — `bufio.NewScanner(stdout)` has a default max token size (64KB/line). If a crawler ever emits a line longer than that (e.g., a stack trace or huge JSON blob on one line), `Scan()` returns `false` and the rest of that provider's output is silently dropped rather than erroring loudly. Not a hot-path perf issue, but worth a `scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)` bump for resilience if long single-line output is possible from the Python side.\n\n---\n\n**Not applicable here:** N+1 queries (no DB/ORM in this file), React re-renders (no React), caching of expensive I/O (the only I/O is one `exec.Command` per provider, not repeated).\n\nIf you want the same pass over `apps/crawler` (Python — likely where actual N+1 HTTP/DB patterns and caching opportunities would live, given it's the part doing the actual crawling/scraping), grant read access to that directory and I'll do a second pass.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Performance Analysis — `apps/cli` (Go/Bubble Tea TUI)",
+        "content": "\nNote: this directory is a Go TUI (`main.go`, `tui.go`) that shells out to the Python crawler — there's no database and no React here, so N+1 queries and React re-renders don't apply directly. I also don't have read access to `apps/crawler` in this session (permission wasn't granted), so this covers only the Go code. The Bubble Tea analog of \"unnecessary re-render\" is real here, though — `View()` fires on every `tea.Msg`, including a spinner tick roughly every 100ms.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. O(n) rescan on every render tick (redundant computation)",
+        "content": "`tui.go:398` — `articlesSaved(st.lines)` linearly rescans **every accumulated log line** for **every provider**, and it's called from `viewRunning()`, which runs on every single `Update`/`View` cycle (every spinner tick, ~10×/sec, times N providers, times however many lines have accumulated).\n\n```go\n// current — tui.go:360-368, called every View()\nfunc articlesSaved(lines []string) int {\n\tn := 0\n\tfor _, l := range lines {\n\t\tif strings.HasPrefix(l, \"  - \") {\n\t\t\tn++\n\t\t}\n\t}\n\treturn n\n}\n```\n\nFix: track the count incrementally where lines are appended, instead of rescanning.\n\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tsavedCt int // maintained incrementally\n}\n\n// in Update(), statusMsg case:\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.savedCt++\n\t}\n\t...\n\n// viewRunning():\ncount := st.savedCt // no rescan\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "2. O(n²) string rebuild in the viewport (redundant computation)",
+        "content": "`tui.go:245-252` — `refreshViewport` calls `strings.Join(m.statuses[name].lines, \"\\n\")` on **every new line**, rebuilding the entire accumulated string from scratch each time. For a provider that emits N lines over a run, that's O(N²) total work just to keep the viewport current.\n\n```go\n// current\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n\tm.vp.GotoBottom()\n}\n```\n\nFix: cache the joined string per provider and append incrementally instead of rejoining on each new line.\n\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tcontent strings.Builder // cached, appended to incrementally\n}\n\n// statusMsg case in Update():\nst.lines = append(st.lines, msg.line)\nif st.content.Len() > 0 {\n\tst.content.WriteByte('\\n')\n}\nst.content.WriteString(msg.line)\n\n// refreshViewport becomes O(1) per call:\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Unbounded memory growth for long/unlimited crawls",
+        "content": "`tui.go:110` / `120` — `st.lines` grows without any cap. With `--limit 0` (\"run until exhausted\") across 11 providers, this can retain arbitrarily large amounts of log text for the life of the process, and it directly feeds items #1 and #2 above (each getting slower as the run progresses — effectively a growing hot loop). Not a leak in the Go-GC sense (nothing is unreachable), but it's unbounded retention that degrades over time.\n\nFix: cap what's retained for display (e.g., keep only the last ~500 lines in a ring buffer for the viewport) while keeping `savedCt` (from fix #1) as the authoritative total count, since that's all the UI actually needs.\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. Minor: `bufio.Scanner` default line-length ceiling",
+        "content": "`main.go:72-75` — `bufio.NewScanner(stdout)` has a default max token size (64KB/line). If a crawler ever emits a line longer than that (e.g., a stack trace or huge JSON blob on one line), `Scan()` returns `false` and the rest of that provider's output is silently dropped rather than erroring loudly. Not a hot-path perf issue, but worth a `scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)` bump for resilience if long single-line output is possible from the Python side.\n\n---\n\n**Not applicable here:** N+1 queries (no DB/ORM in this file), React re-renders (no React), caching of expensive I/O (the only I/O is one `exec.Command` per provider, not repeated).\n\nIf you want the same pass over `apps/crawler` (Python — likely where actual N+1 HTTP/DB patterns and caching opportunities would live, given it's the part doing the actual crawling/scraping), grant read access to that directory and I'll do a second pass.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "// current — tui.go:360-368, called every View()\nfunc articlesSaved(lines []string) int {\n\tn := 0\n\tfor _, l := range lines {\n\t\tif strings.HasPrefix(l, \"  - \") {\n\t\t\tn++\n\t\t}\n\t}\n\treturn n\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tsavedCt int // maintained incrementally\n}\n\n// in Update(), statusMsg case:\ncase statusMsg:\n\tst := m.statuses[msg.provider]\n\tst.state = stateRunning\n\tst.lines = append(st.lines, msg.line)\n\tif strings.HasPrefix(msg.line, \"  - \") {\n\t\tst.savedCt++\n\t}\n\t...\n\n// viewRunning():\ncount := st.savedCt // no rescan"
+      },
+      {
+        "language": "go",
+        "code": "// current\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n\tm.vp.GotoBottom()\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tcontent strings.Builder // cached, appended to incrementally\n}\n\n// statusMsg case in Update():\nst.lines = append(st.lines, msg.line)\nif st.content.Len() > 0 {\n\tst.content.WriteByte('\\n')\n}\nst.content.WriteString(msg.line)\n\n// refreshViewport becomes O(1) per call:\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}"
+      }
+    ]
+  },
+  "durationMs": 106252,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:22:23.066Z",
+  "executionId": "optimize_1783966836814_o8apv5"
+}

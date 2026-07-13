@@ -1,0 +1,86 @@
+[2026-07-13T18:40:55.550Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Now I'll generate a comprehensive security analysis report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"main.go\",\n      \"line\": 42,\n      \"description\": \"Unvalidated provider names in headless mode. In headless mode, the -providers flag accepts comma-separated values that are not validated against the hardcoded providers list. An attacker could pass arbitrary strings that are used as subprocess arguments.\",\n      \"cwe\": \"CWE-78 (OS Command Injection / CWE-94 Code Injection)\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 61,\n      \"description\": \"Path traversal vulnerability in crawler-dir flag. The crawler-dir parameter is used directly as the working directory for cmd.Dir without validation. An attacker could pass paths like '../../../etc/passwd' to execute the crawler in arbitrary locations.\",\n      \"cwe\": \"CWE-22 (Improper Limitation of a Pathname to a Restricted Directory)\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 59,\n      \"description\": \"Insufficient input validation before subprocess execution. While the command construction looks safe (using exec.Command with separate args), the crawlerDir and provider names lack validation, which could lead to unexpected behavior or security issues when passed to the Python subprocess.\",\n      \"cwe\": \"CWE-20 (Improper Input Validation)\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 66,\n      \"description\": \"Stderr combined with stdout without filtering. Error messages and logs are merged into stdout without sanitization, which could expose sensitive information if error messages from the crawler contain sensitive details.\",\n      \"cwe\": \"CWE-532 (Insertion of Sensitive Information into Log File)\"\n    }\n  ],\n  \"riskScore\": 58,\n  \"recommendations\": [\n    \"**HIGH PRIORITY**: Add provider name validation in headless mode (line 42). Before using user-supplied provider names, validate that each name exists in the providers list: `for _, name := range names { if !contains(providers, name) { return fmt.Errorf(\\\"invalid provider: %s\\\", name) } }`\",\n    \"**HIGH PRIORITY**: Validate the crawler-dir path to prevent directory traversal attacks. Use filepath.Clean() and ensure the path resolves to an expected location within the project: `absPath, _ := filepath.Abs(crawlerDir); if !strings.HasPrefix(absPath, projectRoot) { return fmt.Errorf(\\\"invalid crawler dir\\\") }`\",\n    \"**MEDIUM PRIORITY**: Use filepath.Join() or filepath.Base() when constructing paths to prevent path traversal. Validate that crawlerDir is a relative path within the project structure.\",\n    \"**MEDIUM PRIORITY**: Consider using a whitelist of allowed providers globally. Create a validProvider() helper function and use it in both headless and TUI modes to ensure consistency.\",\n    \"**LOW PRIORITY**: Filter or sanitize error messages before combining stderr with stdout. Consider logging sensitive errors to a separate log file instead of stdout.\",\n    \"Consider adding command-line argument validation and error handling. The current implementation silently ignores invalid providers in headless mode.\",\n    \"Add unit tests for security-relevant functions (runCrawler, runHeadless) with malicious inputs (path traversal, command injection attempts).\",\n    \"Document the security model: document that the CLI is intended for local use only, not as a network-exposed service.\"\n  ],\n  \"securityChecksSummary\": {\n    \"hardcodedSecrets\": \"✓ PASS - No hardcoded API keys, passwords, or tokens found\",\n    \"sqlInjection\": \"✓ PASS - No SQL queries or database interactions\",\n    \"xssVulnerabilities\": \"✓ PASS - No web UI or HTML rendering that could be vulnerable to XSS\",\n    \"insecureDependencies\": \"✓ PASS - All dependencies are from reputable sources; no known CVEs in go.sum\",\n    \"authenticationIssues\": \"✓ PASS - CLI tool with no authentication layer\",\n    \"inputValidation\": \"✗ FAIL - Insufficient validation of user-supplied provider names and paths\",\n    \"commandExecution\": \"⚠ PARTIAL - Command construction is safe, but subprocess arguments lack validation\",\n    \"pathTraversal\": \"✗ FAIL - Crawler directory path not validated\"\n  },\n  \"codeQualityNotes\": {\n    \"positives\": [\n      \"Good use of exec.Command() with separate arguments (prevents shell injection in most cases)\",\n      \"Proper error handling and propagation in most places\",\n      \"Clean separation between TUI and headless modes\",\n      \"No use of unsafe reflection or type assertions in security-critical code\"\n    ],\n    \"concerns\": [\n      \"Minimal input validation in headless mode\",\n      \"No logging or audit trail of provider names selected\",\n      \"Flag parsing doesn't restrict allowed values\",\n      \"No capability for users to understand what will execute before running\"\n    ]\n  },\n  \"severityBreakdown\": {\n    \"critical\": 0,\n    \"high\": 1,\n    \"medium\": 2,\n    \"low\": 1,\n    \"info\": 0\n  }\n}\n```\n\n## Key Findings\n\n**Risk Score: 58/100** — This is a **medium-risk** application with exploitable vulnerabilities in input validation.\n\n### Critical Issues:\n1. **Unvalidated Provider Names** — The headless mode accepts arbitrary provider names without checking against the allowed list, potentially allowing injection attacks\n2. **Path Traversal** — The crawler-dir flag is not validated, allowing directory traversal attacks\n\n### Positive Notes:\n- ✅ No hardcoded secrets or API keys\n- ✅ No SQL injection risks (no database interactions)\n- ✅ No XSS vulnerabilities (CLI only, no web UI)\n- ✅ Dependencies are from trusted sources with no known CVEs\n\n### Recommendations (Priority Order):\n1. Add provider whitelist validation before subprocess execution\n2. Validate crawler-dir to prevent path traversal\n3. Add integration tests with malicious inputs\n4. Document the security model and use cases\n\nThis codebase is suitable for local use but should not be exposed as a network service without additional security hardening.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "main.go",
+        "line": 42,
+        "description": "Unvalidated provider names in headless mode. In headless mode, the -providers flag accepts comma-separated values that are not validated against the hardcoded providers list. An attacker could pass arbitrary strings that are used as subprocess arguments.",
+        "cwe": "CWE-78 (OS Command Injection / CWE-94 Code Injection)"
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 61,
+        "description": "Path traversal vulnerability in crawler-dir flag. The crawler-dir parameter is used directly as the working directory for cmd.Dir without validation. An attacker could pass paths like '../../../etc/passwd' to execute the crawler in arbitrary locations.",
+        "cwe": "CWE-22 (Improper Limitation of a Pathname to a Restricted Directory)"
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 59,
+        "description": "Insufficient input validation before subprocess execution. While the command construction looks safe (using exec.Command with separate args), the crawlerDir and provider names lack validation, which could lead to unexpected behavior or security issues when passed to the Python subprocess.",
+        "cwe": "CWE-20 (Improper Input Validation)"
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 66,
+        "description": "Stderr combined with stdout without filtering. Error messages and logs are merged into stdout without sanitization, which could expose sensitive information if error messages from the crawler contain sensitive details.",
+        "cwe": "CWE-532 (Insertion of Sensitive Information into Log File)"
+      }
+    ],
+    "riskScore": 58,
+    "recommendations": [
+      "**HIGH PRIORITY**: Add provider name validation in headless mode (line 42). Before using user-supplied provider names, validate that each name exists in the providers list: `for _, name := range names { if !contains(providers, name) { return fmt.Errorf(\"invalid provider: %s\", name) } }`",
+      "**HIGH PRIORITY**: Validate the crawler-dir path to prevent directory traversal attacks. Use filepath.Clean() and ensure the path resolves to an expected location within the project: `absPath, _ := filepath.Abs(crawlerDir); if !strings.HasPrefix(absPath, projectRoot) { return fmt.Errorf(\"invalid crawler dir\") }`",
+      "**MEDIUM PRIORITY**: Use filepath.Join() or filepath.Base() when constructing paths to prevent path traversal. Validate that crawlerDir is a relative path within the project structure.",
+      "**MEDIUM PRIORITY**: Consider using a whitelist of allowed providers globally. Create a validProvider() helper function and use it in both headless and TUI modes to ensure consistency.",
+      "**LOW PRIORITY**: Filter or sanitize error messages before combining stderr with stdout. Consider logging sensitive errors to a separate log file instead of stdout.",
+      "Consider adding command-line argument validation and error handling. The current implementation silently ignores invalid providers in headless mode.",
+      "Add unit tests for security-relevant functions (runCrawler, runHeadless) with malicious inputs (path traversal, command injection attempts).",
+      "Document the security model: document that the CLI is intended for local use only, not as a network-exposed service."
+    ],
+    "securityChecksSummary": {
+      "hardcodedSecrets": "✓ PASS - No hardcoded API keys, passwords, or tokens found",
+      "sqlInjection": "✓ PASS - No SQL queries or database interactions",
+      "xssVulnerabilities": "✓ PASS - No web UI or HTML rendering that could be vulnerable to XSS",
+      "insecureDependencies": "✓ PASS - All dependencies are from reputable sources; no known CVEs in go.sum",
+      "authenticationIssues": "✓ PASS - CLI tool with no authentication layer",
+      "inputValidation": "✗ FAIL - Insufficient validation of user-supplied provider names and paths",
+      "commandExecution": "⚠ PARTIAL - Command construction is safe, but subprocess arguments lack validation",
+      "pathTraversal": "✗ FAIL - Crawler directory path not validated"
+    },
+    "codeQualityNotes": {
+      "positives": [
+        "Good use of exec.Command() with separate arguments (prevents shell injection in most cases)",
+        "Proper error handling and propagation in most places",
+        "Clean separation between TUI and headless modes",
+        "No use of unsafe reflection or type assertions in security-critical code"
+      ],
+      "concerns": [
+        "Minimal input validation in headless mode",
+        "No logging or audit trail of provider names selected",
+        "Flag parsing doesn't restrict allowed values",
+        "No capability for users to understand what will execute before running"
+      ]
+    },
+    "severityBreakdown": {
+      "critical": 0,
+      "high": 1,
+      "medium": 2,
+      "low": 1,
+      "info": 0
+    }
+  },
+  "durationMs": 78430,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:40:55.550Z",
+  "executionId": "audit_1783967977120_7qougc"
+}

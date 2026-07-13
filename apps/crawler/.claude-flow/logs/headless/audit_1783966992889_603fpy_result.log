@@ -1,0 +1,46 @@
+[2026-07-13T18:23:39.555Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "# Security Analysis Report\n\n## Overview\nThe provided codebase consists of **bundled Playwright library files** (a Microsoft-maintained browser automation framework) from a Python virtual environment. These are third-party dependencies, not custom application code.\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js\",\n      \"line\": 185,\n      \"description\": \"Potential arbitrary command execution via child_process if argv is not properly sanitized before shell execution. However, this is an internal CLI tool with controlled input.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js\",\n      \"line\": 28,\n      \"description\": \"Electron security features are disabled via command-line switches (e.g., --unsafely-disable-devtools-self-xss-warnings). This is intentional for testing but represents reduced security in the automation context.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 95,\n      \"description\": \"Socket connections created to localhost without TLS verification, but restricted to 127.0.0.1 only. Appropriate for local IPC.\"\n    }\n  ],\n  \"riskScore\": 22,\n  \"recommendations\": [\n    \"✓ NO hardcoded secrets detected\",\n    \"✓ NO SQL injection risks (not a database library)\",\n    \"✓ NO XSS vulnerabilities in visible code\",\n    \"Keep Playwright/Patchright updated to latest version for security patches\",\n    \"Use Playwright only in development environments when possible; browser automation reduces isolation\",\n    \"When running automated tests, use restrictive network policies to limit browser access\",\n    \"Review your own application code that calls these Playwright APIs for input validation\",\n    \"Disable browser testing in production; use it only in CI/CD pipelines with appropriate sandboxing\",\n    \"Monitor for CVEs in Playwright: https://github.com/microsoft/playwright/security/advisories\"\n  ]\n}\n```\n\n## Key Findings\n\n| Category | Status | Details |\n|----------|--------|---------|\n| **Hardcoded Secrets** | ✅ Safe | No API keys, passwords, or credentials found |\n| **SQL Injection** | ✅ Safe | Library handles browser automation, not databases |\n| **XSS** | ✅ Safe | No unsafe HTML rendering or user input processing |\n| **Dependencies** | ✅ Safe | Uses standard Node.js built-ins; no suspicious packages |\n| **Auth/Authorization** | ✅ Safe | Local IPC only (127.0.0.1), no exposed APIs |\n\n## Context\n\nThis is **third-party library code** (Playwright) in your virtual environment—not your application code. The code is:\n- ✅ From a reputable source (Microsoft)\n- ✅ Well-maintained with active security reviews\n- ✅ Following secure practices for file I/O and subprocess handling\n\n**Risk Score: 22/100** (Low) — No critical vulnerabilities detected. This is mature, audited software.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js",
+        "line": 185,
+        "description": "Potential arbitrary command execution via child_process if argv is not properly sanitized before shell execution. However, this is an internal CLI tool with controlled input."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js",
+        "line": 28,
+        "description": "Electron security features are disabled via command-line switches (e.g., --unsafely-disable-devtools-self-xss-warnings). This is intentional for testing but represents reduced security in the automation context."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 95,
+        "description": "Socket connections created to localhost without TLS verification, but restricted to 127.0.0.1 only. Appropriate for local IPC."
+      }
+    ],
+    "riskScore": 22,
+    "recommendations": [
+      "✓ NO hardcoded secrets detected",
+      "✓ NO SQL injection risks (not a database library)",
+      "✓ NO XSS vulnerabilities in visible code",
+      "Keep Playwright/Patchright updated to latest version for security patches",
+      "Use Playwright only in development environments when possible; browser automation reduces isolation",
+      "When running automated tests, use restrictive network policies to limit browser access",
+      "Review your own application code that calls these Playwright APIs for input validation",
+      "Disable browser testing in production; use it only in CI/CD pipelines with appropriate sandboxing",
+      "Monitor for CVEs in Playwright: https://github.com/microsoft/playwright/security/advisories"
+    ]
+  },
+  "durationMs": 26666,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:23:39.555Z",
+  "executionId": "audit_1783966992889_603fpy"
+}

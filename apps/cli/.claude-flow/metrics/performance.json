@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-07-13T18:53:55.896Z",
+  "mode": "headless",
+  "workerType": "optimize",
+  "model": "sonnet",
+  "durationMs": 162880,
+  "executionId": "optimize_1783968673016_ahftlz",
+  "success": true,
+  "findings": {
+    "sections": [
+      {
+        "title": "Findings",
+        "content": "\nThis is a small Go TUI/CLI (`main.go` + `tui.go`, 543 lines total, using Bubble Tea) that shells out to a Python crawler per provider and streams its stdout into a terminal UI. There's no database, ORM, or React here, so most of the requested categories (N+1 queries, React re-renders, query caching) don't map onto this code as-is. I've reframed them to the closest real analogs and flagged what's actually present. (Note: I don't have read access to `apps/crawler` — the Python side — from this session, so this is scoped to `apps/cli`.)\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. Redundant computation — `articlesSaved()` rescans full log history every render",
+        "content": "`tui.go:403` calls `articlesSaved(st.lines)` for every provider, inside `viewRunning()`, which runs on **every** `View()` call. Bubble Tea calls `View()` after every `Update()` — including every `spinner.TickMsg` (fires every ~100ms via `spinner.Dot`) and every single stdout line from the crawlers. `articlesSaved` (`tui.go:365-373`) does a full `strings.HasPrefix` scan over the provider's entire accumulated `lines` slice.\n\n**Impact:** for N providers each with a growing log (e.g. `--limit 0`, \"run until exhausted\"), you're redoing an O(total lines across all providers) scan roughly 10 times a second, and the cost grows unboundedly with run length.\n\n**Fix:** maintain a running counter instead of recomputing from history:\n```go\ntype providerStatus struct {\n    state  providerState\n    lines  []string\n    saved  int // incremented as lines arrive, not recomputed on render\n}\n\n// in Update(), statusMsg case:\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n    st.saved++\n}\n```\nThen `viewRunning()` reads `st.saved` directly — no scan, no `articlesSaved` call at render time.\n\n",
+        "level": 3
+      },
+      {
+        "title": "2. Redundant computation — `refreshViewport()` rejoins entire log on every new line",
+        "content": "`tui.go:253`: `m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))` runs every time a new line arrives for the currently-highlighted provider (`tui.go:114-116`). Each call rejoins the *entire* accumulated slice, so total work across a run is O(n²) in that provider's line count — the most expensive hot path in the app for long crawls.\n\n**Fix:** append incrementally instead of rebuilding. Either track the joined string alongside `lines` and append `\"\\n\" + line`, or use `viewport.SetContent` with just the new line region if the viewport API supports incremental writes in your bubbles version:\n```go\ntype providerStatus struct {\n    state   providerState\n    lines   []string\n    content strings.Builder // incrementally built, avoids O(n) join per line\n}\n// on new line: if content.Len() > 0 { content.WriteByte('\\n') }; content.WriteString(msg.line)\n// refreshViewport: m.vp.SetContent(m.statuses[name].content.String())\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Unbounded memory growth — per-provider log buffer has no cap",
+        "content": "`providerStatus.lines` (`tui.go:35-38`) grows forever for the life of a run — appended on every `statusMsg` (`tui.go:113`), never trimmed. Combined with `--limit 0` (explicitly \"run until exhausted\"), a noisy provider/crawler could accumulate a very large in-memory log for the session. Not a leak in the classic sense (freed when the process exits), but worth capping since it directly feeds the O(n²) join issue above too.\n\n**Fix:** cap to the last N lines with a ring buffer, or keep full history only for the last-highlighted provider:\n```go\nconst maxLines = 5000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLines {\n    st.lines = st.lines[len(st.lines)-maxLines:]\n}\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **N+1 queries / caching:** no database or repeated-fetch pattern in this package — `apps/cli` only orchestrates one subprocess per selected provider (`main.go:63-89`, `tui.go:272-278`), which is correct, not N+1.\n- **React re-renders:** not a React codebase; findings #1–#2 above are the direct analog (expensive recomputation on every re-render tick).\n- **Classic memory leaks** (unclosed handles, goroutine leaks): none found — `cmd.Cancel` kills the whole process group on context cancellation (`main.go:70-72`), and each provider goroutine exits cleanly after `cmd.Wait()` returns.\n\n**Priority:** #2 (O(n²) viewport rejoin) is the one that will actually bite on a long `--limit 0` run; #1 is cheap per-call but compounds due to the ~10Hz render tick. Both share the same fix shape — stop deriving from full history on every render, maintain incremental state instead.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n    state  providerState\n    lines  []string\n    saved  int // incremented as lines arrive, not recomputed on render\n}\n\n// in Update(), statusMsg case:\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n    st.saved++\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n    state   providerState\n    lines   []string\n    content strings.Builder // incrementally built, avoids O(n) join per line\n}\n// on new line: if content.Len() > 0 { content.WriteByte('\\n') }; content.WriteString(msg.line)\n// refreshViewport: m.vp.SetContent(m.statuses[name].content.String())"
+      },
+      {
+        "language": "go",
+        "code": "const maxLines = 5000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLines {\n    st.lines = st.lines[len(st.lines)-maxLines:]\n}"
+      }
+    ]
+  },
+  "rawOutputPreview": "## Findings\n\nThis is a small Go TUI/CLI (`main.go` + `tui.go`, 543 lines total, using Bubble Tea) that shells out to a Python crawler per provider and streams its stdout into a terminal UI. There's no database, ORM, or React here, so most of the requested categories (N+1 queries, React re-renders, query caching) don't map onto this code as-is. I've reframed them to the closest real analogs and flagged what's actually present. (Note: I don't have read access to `apps/crawler` — the Python side — from this session, so this is scoped to `apps/cli`.)\n\n### 1. Redundant computation — `articlesSaved()` rescans full log history every render\n`tui.go:403` calls `articlesSaved(st.lines)` for every provider, inside `viewRunning()`, which runs on **every** `View()` call. Bubble Tea calls `View()` after every `Update()` — including every `spinner.TickMsg` (fires every ~100ms via `spinner.Dot`) and every single stdout line from the crawlers. `articlesSaved` (`tui.go:365-373`) does a full `strings.HasPrefix` scan over the provider's entire accumulated `lines` slice.\n\n**Impact:** for N providers each with a growing log (e.g. `--limit 0`, \"run until exhausted\"), you're redoing an O(total lines across all providers) scan roughly 10 times a second, and the cost grows unboundedly with run length.\n\n**Fix:** maintain a running counter instead of recomputing from history:\n```go\ntype providerStatus struct {\n    state  providerState\n    lines  []string\n    saved  int // incremented as lines arrive, not recomputed on render\n}\n\n// in Update(), statusMsg case:\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n    st.saved++\n}\n```\nThen `viewRunning()` reads `st.saved` directly — no scan, no `articlesSaved` call at render time.\n\n### 2. Redundant computation — `refreshViewport()` rejoins entire log on every new line\n`tui.go:253`: `m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))` runs every time a new line arrives for the currently-highlighted provider (`tui",
+  "rawOutputLength": 4442
+}

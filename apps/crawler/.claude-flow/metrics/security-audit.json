@@ -1,0 +1,53 @@
+{
+  "timestamp": "2026-07-13T18:56:07.763Z",
+  "mode": "headless",
+  "workerType": "audit",
+  "model": "haiku",
+  "durationMs": 63885,
+  "executionId": "audit_1783968903878_9mdbau",
+  "success": true,
+  "findings": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js",
+        "line": 31,
+        "description": "Unsafe array splice with indexOf. If '--remote-debugging-port=0' is not found, indexOf returns -1, causing splice(1, -1) to remove all but the last element unexpectedly. This could corrupt process.argv and cause unexpected behavior.",
+        "vulnerability_type": "logic_error"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js",
+        "line": 56,
+        "description": "Untrusted file read from user data directory (DevToolsActivePort). While port validation exists, a malicious local user could potentially hijack the DevToolsActivePort file to redirect connections to an attacker-controlled service.",
+        "vulnerability_type": "local_privilege_escalation"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 68,
+        "description": "Socket path created in daemon directory without explicit ownership or permission verification. Local privilege escalation possible if daemon directory permissions are misconfigured.",
+        "vulnerability_type": "local_privilege_escalation"
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js",
+        "line": 14,
+        "description": "Environment variable PW_INSTRUMENT_MODULES enables code instrumentation without explicit validation. Could potentially be abused if environment is untrusted.",
+        "vulnerability_type": "configuration_exposure"
+      }
+    ],
+    "riskScore": 28,
+    "recommendations": [
+      "Fix the array splice logic in loader.js: use 'const idx = process.argv.indexOf(...); if (idx !== -1) { process.argv.splice(...) }' to safely handle missing strings",
+      "Add file ownership verification when reading DevToolsActivePort and other sensitive local files",
+      "Implement explicit socket file permission checks (0600) when creating daemon socket paths",
+      "Document and validate all environment variables that control security-relevant behavior",
+      "Consider restricting environment variable-based instrumentation to development builds only",
+      "Implement symlink attack protection when creating/reading files in user home directories",
+      "Add input validation for port numbers read from files before attempting connections"
+    ]
+  },
+  "rawOutputPreview": "```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js\",\n      \"line\": 31,\n      \"description\": \"Unsafe array splice with indexOf. If '--remote-debugging-port=0' is not found, indexOf returns -1, causing splice(1, -1) to remove all but the last element unexpectedly. This could corrupt process.argv and cause unexpected behavior.\",\n      \"vulnerability_type\": \"logic_error\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js\",\n      \"line\": 56,\n      \"description\": \"Untrusted file read from user data directory (DevToolsActivePort). While port validation exists, a malicious local user could potentially hijack the DevToolsActivePort file to redirect connections to an attacker-controlled service.\",\n      \"vulnerability_type\": \"local_privilege_escalation\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 68,\n      \"description\": \"Socket path created in daemon directory without explicit ownership or permission verification. Local privilege escalation possible if daemon directory permissions are misconfigured.\",\n      \"vulnerability_type\": \"local_privilege_escalation\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js\",\n      \"line\": 14,\n      \"description\": \"Environment variable PW_INSTRUMENT_MODULES enables code instrumentation without explicit validation. Could potentially be abused if environment is untrusted.\",\n      \"vulnerability_type\": \"configuration_exposure\"\n    }\n  ],\n  \"riskScore\": 28,\n  \"recommendations\": [\n    \"Fix the array splice logic in loader.js: use 'const idx = process.argv.indexOf(...); if (idx !== -1) { process.argv.splice(...) }' to safely handle ",
+  "rawOutputLength": 3383
+}

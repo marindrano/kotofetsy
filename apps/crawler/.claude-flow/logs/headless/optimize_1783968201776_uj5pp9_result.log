@@ -1,0 +1,88 @@
+[2026-07-13T18:45:37.676Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Performance Analysis — `apps/crawler`\n\nContext: this is a pure-Python scraping pipeline (no DB/ORM, no React) — so I've mapped your categories onto their actual equivalents here: HTTP-fetch fan-out instead of SQL N+1, and process-level state I/O instead of frontend caching/re-renders.\n\n### 1. State file rewrite = O(n²) over a crawl (biggest win)\n\n`base.py:308-314` — every single saved (or skipped) article does:\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)      # re-sorts the WHOLE set every article\n...\nself._save_state(state)                 # re-serializes + rewrites the WHOLE file every article\n```\n`state/malagasynews-mbs.json` is already 177KB with thousands of URLs. Sorting and JSON-dumping that entire list after every article (not just at the end) turns an O(n) crawl into O(n² log n). This gets worse every run since the set only grows.\n\n**Fix** — keep `seen` as an unsorted set, only sort at output time, and stop re-sorting the same growing list on every iteration:\n```python\ndef _save_state(self, state: dict) -> None:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    tmp_path = self._state_path.with_suffix(\".json.tmp\")\n    tmp_path.write_text(json.dumps(state, ensure_ascii=False), encoding=\"utf-8\")  # drop indent=2 too — pretty-printing a multi-KB array every write is pure overhead\n    tmp_path.replace(self._state_path)\n\n# in crawl():\nseen.add(url)\nstate[\"seen_urls\"] = list(seen)   # sort only if something actually reads order; nothing here does\n```\nIf you need crash-safety per article but not full-file-rewrite-per-article, consider appending new URLs to a small sidecar log and merging into the JSON state every N articles instead — trades a tiny bit of resumability precision for a large I/O win at scale.\n\n### 2. Duplicate network fetch per article (\"N+1\" analogue)\n\n- **`Moov.list_article_urls()`** (`providers.py:224-236`) fetches every article page once to expand the link frontier, then `crawl()` calls `parse_article(url)` which fetches the **same URL again** via `self.fetch()`. Every article costs 2 HTTP round-trips instead of 1.\n- **`FreeNews`** (`providers.py:170-192`) — the docstring even says the WP REST API already returns full `content.rendered`, yet `parse_article` still does a second fetch per article for a full page.\n\n**Fix for Moov**: cache the already-fetched page from the frontier walk and hand it to `parse_article` instead of refetching:\n```python\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        yield url\n        page = self._page_cache[url] = Fetcher.get(url, ...)   # store, don't discard\n```\nthen override `fetch()` to check `self._page_cache.pop(url, None)` before hitting the network. Same idea applies to FreeNews: parse `content.rendered` directly from the API response instead of a second full-page fetch, per the ceiling note already in the code.\n\n### 3. Redundant computation: double-extracting paragraph text\n\n`base.py:183-187`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- extracted once here...\n)                                    # ...and again here for every non-empty paragraph\n```\n`get_all_text` walks/concatenates the DOM subtree — doing it twice per paragraph is wasted work across every article, every provider.\n\n**Fix:**\n```python\ntexts = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(t for t in texts if t)\n```\n\n### 4. Log file opened/closed per line\n\n`base.py:151-155` — `_log()` does `.open(\"a\")` → write → close for every single log call. For long crawls (thousands of articles) that's thousands of redundant open/fsync-adjacent syscalls.\n\n**Fix**: hold a single open file handle per `NewsSource` instance (open lazily in `__init__` or via a cached property), write to it, and only close at the end of `crawl()`. Minor, but free.\n\n### 5. Memory growth on unlimited crawls\n\n`base.py:284,309` — `saved: list[Article] = []` accumulates every `Article` (including full body text) in memory for the whole run, even though each is already durably appended to the JSONL file as it goes (`_append_article`). With `--limit 0` (explicitly meant to run \"until exhausted\") on a provider with thousands of remaining articles, this holds the entire corpus in RAM for no reason — the return value is only used by the caller for a count.\n\n**Fix**: since callers (`main.py`) only use `len(articles)` and the last title via `on_save`, track a counter instead of accumulating the list, or make `crawl()` a generator/counter and let `on_save` be the sole consumer of article payloads.\n\n### 6. Minor: regex not precompiled\n\n`parse_french_date`/`parse_numeric_date` (`base.py:90-113`) call `re.search(r\"...\")` with a literal pattern on every invocation — CPython's `re` module caches ~512 compiled patterns internally so this is not urgent, but since these run once per article across every provider, precompiling at module scope (`_FRENCH_DATE_RE = re.compile(...)`) removes even that lookup cost and documents intent.\n\n### Not applicable here\n- **N+1 SQL / ORM queries**: no database layer exists — persistence is flat JSONL + JSON state files, so the closest analogue is #1/#2 above.\n- **React re-renders**: no frontend code in this directory (it's the Python crawler, not the UI app) — nothing to review.\n\n### Priority order\n1. Stop re-sorting/rewriting full state on every article (#1) — biggest, cheapest win given your largest state files are already 100–180KB.\n2. Fix Moov/FreeNews double-fetch (#2) — halves network calls for those two providers.\n3. Dedup `get_all_text()` calls (#3) — free, applies to every provider.\n4. Log handle reuse (#4) and unbounded `saved` list (#5) — worth doing, lower impact than 1–2.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Performance Analysis — `apps/crawler`",
+        "content": "\nContext: this is a pure-Python scraping pipeline (no DB/ORM, no React) — so I've mapped your categories onto their actual equivalents here: HTTP-fetch fan-out instead of SQL N+1, and process-level state I/O instead of frontend caching/re-renders.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. State file rewrite = O(n²) over a crawl (biggest win)",
+        "content": "\n`base.py:308-314` — every single saved (or skipped) article does:\n```python\nseen.add(url)\nstate[\"seen_urls\"] = sorted(seen)      # re-sorts the WHOLE set every article\n...\nself._save_state(state)                 # re-serializes + rewrites the WHOLE file every article\n```\n`state/malagasynews-mbs.json` is already 177KB with thousands of URLs. Sorting and JSON-dumping that entire list after every article (not just at the end) turns an O(n) crawl into O(n² log n). This gets worse every run since the set only grows.\n\n**Fix** — keep `seen` as an unsorted set, only sort at output time, and stop re-sorting the same growing list on every iteration:\n```python\ndef _save_state(self, state: dict) -> None:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    tmp_path = self._state_path.with_suffix(\".json.tmp\")\n    tmp_path.write_text(json.dumps(state, ensure_ascii=False), encoding=\"utf-8\")  # drop indent=2 too — pretty-printing a multi-KB array every write is pure overhead\n    tmp_path.replace(self._state_path)\n\n",
+        "level": 3
+      },
+      {
+        "title": "in crawl():",
+        "content": "seen.add(url)\nstate[\"seen_urls\"] = list(seen)   # sort only if something actually reads order; nothing here does\n```\nIf you need crash-safety per article but not full-file-rewrite-per-article, consider appending new URLs to a small sidecar log and merging into the JSON state every N articles instead — trades a tiny bit of resumability precision for a large I/O win at scale.\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Duplicate network fetch per article (\"N+1\" analogue)",
+        "content": "\n- **`Moov.list_article_urls()`** (`providers.py:224-236`) fetches every article page once to expand the link frontier, then `crawl()` calls `parse_article(url)` which fetches the **same URL again** via `self.fetch()`. Every article costs 2 HTTP round-trips instead of 1.\n- **`FreeNews`** (`providers.py:170-192`) — the docstring even says the WP REST API already returns full `content.rendered`, yet `parse_article` still does a second fetch per article for a full page.\n\n**Fix for Moov**: cache the already-fetched page from the frontier walk and hand it to `parse_article` instead of refetching:\n```python\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        yield url\n        page = self._page_cache[url] = Fetcher.get(url, ...)   # store, don't discard\n```\nthen override `fetch()` to check `self._page_cache.pop(url, None)` before hitting the network. Same idea applies to FreeNews: parse `content.rendered` directly from the API response instead of a second full-page fetch, per the ceiling note already in the code.\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Redundant computation: double-extracting paragraph text",
+        "content": "\n`base.py:183-187`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- extracted once here...\n)                                    # ...and again here for every non-empty paragraph\n```\n`get_all_text` walks/concatenates the DOM subtree — doing it twice per paragraph is wasted work across every article, every provider.\n\n**Fix:**\n```python\ntexts = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(t for t in texts if t)\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. Log file opened/closed per line",
+        "content": "\n`base.py:151-155` — `_log()` does `.open(\"a\")` → write → close for every single log call. For long crawls (thousands of articles) that's thousands of redundant open/fsync-adjacent syscalls.\n\n**Fix**: hold a single open file handle per `NewsSource` instance (open lazily in `__init__` or via a cached property), write to it, and only close at the end of `crawl()`. Minor, but free.\n\n",
+        "level": 3
+      },
+      {
+        "title": "5. Memory growth on unlimited crawls",
+        "content": "\n`base.py:284,309` — `saved: list[Article] = []` accumulates every `Article` (including full body text) in memory for the whole run, even though each is already durably appended to the JSONL file as it goes (`_append_article`). With `--limit 0` (explicitly meant to run \"until exhausted\") on a provider with thousands of remaining articles, this holds the entire corpus in RAM for no reason — the return value is only used by the caller for a count.\n\n**Fix**: since callers (`main.py`) only use `len(articles)` and the last title via `on_save`, track a counter instead of accumulating the list, or make `crawl()` a generator/counter and let `on_save` be the sole consumer of article payloads.\n\n",
+        "level": 3
+      },
+      {
+        "title": "6. Minor: regex not precompiled",
+        "content": "\n`parse_french_date`/`parse_numeric_date` (`base.py:90-113`) call `re.search(r\"...\")` with a literal pattern on every invocation — CPython's `re` module caches ~512 compiled patterns internally so this is not urgent, but since these run once per article across every provider, precompiling at module scope (`_FRENCH_DATE_RE = re.compile(...)`) removes even that lookup cost and documents intent.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **N+1 SQL / ORM queries**: no database layer exists — persistence is flat JSONL + JSON state files, so the closest analogue is #1/#2 above.\n- **React re-renders**: no frontend code in this directory (it's the Python crawler, not the UI app) — nothing to review.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Priority order",
+        "content": "1. Stop re-sorting/rewriting full state on every article (#1) — biggest, cheapest win given your largest state files are already 100–180KB.\n2. Fix Moov/FreeNews double-fetch (#2) — halves network calls for those two providers.\n3. Dedup `get_all_text()` calls (#3) — free, applies to every provider.\n4. Log handle reuse (#4) and unbounded `saved` list (#5) — worth doing, lower impact than 1–2.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "seen.add(url)\nstate[\"seen_urls\"] = sorted(seen)      # re-sorts the WHOLE set every article\n...\nself._save_state(state)                 # re-serializes + rewrites the WHOLE file every article"
+      },
+      {
+        "language": "python",
+        "code": "def _save_state(self, state: dict) -> None:\n    self._state_path.parent.mkdir(parents=True, exist_ok=True)\n    tmp_path = self._state_path.with_suffix(\".json.tmp\")\n    tmp_path.write_text(json.dumps(state, ensure_ascii=False), encoding=\"utf-8\")  # drop indent=2 too — pretty-printing a multi-KB array every write is pure overhead\n    tmp_path.replace(self._state_path)\n\n# in crawl():\nseen.add(url)\nstate[\"seen_urls\"] = list(seen)   # sort only if something actually reads order; nothing here does"
+      },
+      {
+        "language": "python",
+        "code": "def list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        yield url\n        page = self._page_cache[url] = Fetcher.get(url, ...)   # store, don't discard"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <-- extracted once here...\n)                                    # ...and again here for every non-empty paragraph"
+      },
+      {
+        "language": "python",
+        "code": "texts = (p.get_all_text(strip=True) for p in page.css(s.body))\nbody = \"\\n\\n\".join(t for t in texts if t)"
+      }
+    ]
+  },
+  "durationMs": 135900,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:45:37.676Z",
+  "executionId": "optimize_1783968201776_uj5pp9"
+}

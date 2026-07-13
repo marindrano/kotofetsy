@@ -1,0 +1,70 @@
+[2026-07-13T18:23:00.925Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "# Security Audit Report\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 116,\n      \"description\": \"Insecure file permissions on daemon directory. fs.promises.mkdir() creates directory without specifying mode parameter, resulting in default permissions that may be world-readable. Sensitive session files stored here could be accessed by unprivileged users.\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 47,\n      \"description\": \"Untrusted socket path from config file used without validation. this.config.socketPath is read from JSON config and used directly in net.createConnection() with no path validation, enabling potential socket hijacking or local privilege escalation attacks.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 44,\n      \"description\": \"Insufficient session name validation allows potential path traversal. Session names are used to construct file paths without filtering directory traversal sequences (../, etc.), could allow reading arbitrary files.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js\",\n      \"line\": 69,\n      \"description\": \"Unvalidated environment variable used for feature control. process.env.PLAYWRIGHT_LEGACY_SCREENSHOT controls security-relevant behavior without validation, could be manipulated by process environment.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js\",\n      \"line\": 82,\n      \"description\": \"Command-line arguments parsed with minimist without strict type validation. Arguments used for critical operations (session control, file operations) without comprehensive input validation.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 68,\n      \"description\": \"Sensitive session configuration files may have overly permissive read access. JSON config files containing socket paths and session metadata stored without explicit restrictive permissions.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js\",\n      \"line\": 123,\n      \"description\": \"Detailed error messages expose filesystem paths. Error outputs reveal full paths to daemon directories and configuration locations, aiding reconnaissance attacks.\"\n    }\n  ],\n  \"riskScore\": 62,\n  \"recommendations\": [\n    \"Enforce strict file permissions on daemon directory: use fs.promises.mkdir(..., { mode: 0o700 }) to ensure only owner can read/write session files\",\n    \"Validate socket paths before use: implement whitelist validation and ensure socket path is within expected daemon directory with no traversal sequences\",\n    \"Implement session name sanitization: reject any session names containing './', '../', or null bytes; use allowlist of alphanumeric + hyphen/underscore only\",\n    \"Centralize environment variable validation: create a config validator that explicitly checks all env vars used for security-critical features\",\n    \"Add strict input validation to minimist args: validate session names, paths, and command parameters against strict allowlists before use\",\n    \"Use restrictive file mode for config files: when writing session configs, explicitly set mode to 0o600 (owner read/write only)\",\n    \"Implement daemon socket authentication: add shared secret or capability-based token validation to daemon socket communication\",\n    \"Sanitize error messages: remove full paths from user-facing error messages; log full details to secure audit log instead\",\n    \"Add path traversal detection: implement realpath() verification ensuring resolved paths stay within expected base directories\"\n  ]\n}\n```\n\n## Key Findings\n\n**Risk Score: 62/100** — Medium-High Risk\n\nThe codebase manages sensitive session state and daemon communication but lacks critical input validation and file permission hardening:\n\n- **Critical Gap**: Daemon directory permissions are inherited defaults, potentially exposing session files to other local users\n- **Attack Surface**: Session name validation is absent, enabling path traversal to read arbitrary files\n- **Privilege Boundary**: No cryptographic validation of socket paths from config files; local privilege escalation possible via socket hijacking\n\nThis is primarily a **local privilege escalation** risk rather than remote exploitation, but serious in multi-user environments.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 116,
+        "description": "Insecure file permissions on daemon directory. fs.promises.mkdir() creates directory without specifying mode parameter, resulting in default permissions that may be world-readable. Sensitive session files stored here could be accessed by unprivileged users."
+      },
+      {
+        "severity": "high",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 47,
+        "description": "Untrusted socket path from config file used without validation. this.config.socketPath is read from JSON config and used directly in net.createConnection() with no path validation, enabling potential socket hijacking or local privilege escalation attacks."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 44,
+        "description": "Insufficient session name validation allows potential path traversal. Session names are used to construct file paths without filtering directory traversal sequences (../, etc.), could allow reading arbitrary files."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js",
+        "line": 69,
+        "description": "Unvalidated environment variable used for feature control. process.env.PLAYWRIGHT_LEGACY_SCREENSHOT controls security-relevant behavior without validation, could be manipulated by process environment."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js",
+        "line": 82,
+        "description": "Command-line arguments parsed with minimist without strict type validation. Arguments used for critical operations (session control, file operations) without comprehensive input validation."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 68,
+        "description": "Sensitive session configuration files may have overly permissive read access. JSON config files containing socket paths and session metadata stored without explicit restrictive permissions."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js",
+        "line": 123,
+        "description": "Detailed error messages expose filesystem paths. Error outputs reveal full paths to daemon directories and configuration locations, aiding reconnaissance attacks."
+      }
+    ],
+    "riskScore": 62,
+    "recommendations": [
+      "Enforce strict file permissions on daemon directory: use fs.promises.mkdir(..., { mode: 0o700 }) to ensure only owner can read/write session files",
+      "Validate socket paths before use: implement whitelist validation and ensure socket path is within expected daemon directory with no traversal sequences",
+      "Implement session name sanitization: reject any session names containing './', '../', or null bytes; use allowlist of alphanumeric + hyphen/underscore only",
+      "Centralize environment variable validation: create a config validator that explicitly checks all env vars used for security-critical features",
+      "Add strict input validation to minimist args: validate session names, paths, and command parameters against strict allowlists before use",
+      "Use restrictive file mode for config files: when writing session configs, explicitly set mode to 0o600 (owner read/write only)",
+      "Implement daemon socket authentication: add shared secret or capability-based token validation to daemon socket communication",
+      "Sanitize error messages: remove full paths from user-facing error messages; log full details to secure audit log instead",
+      "Add path traversal detection: implement realpath() verification ensuring resolved paths stay within expected base directories"
+    ]
+  },
+  "durationMs": 28082,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:23:00.925Z",
+  "executionId": "audit_1783966952843_7byaa6"
+}

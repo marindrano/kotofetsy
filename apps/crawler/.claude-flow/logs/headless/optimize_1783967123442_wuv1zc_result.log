@@ -1,0 +1,97 @@
+[2026-07-13T18:27:18.421Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "This is a **Python web scraper** (not a React app) — I'll map the requested categories onto its actual stack: repeated I/O in loops instead of \"N+1 queries,\" no UI to re-render, but real redundant-computation and memory patterns. Findings below are grounded in `base.py`, `providers.py`, and confirmed against on-disk state sizes (e.g. `state/malagasynews-mbs.json` is already 144K / ~900 seen URLs).\n\n## 1. Quadratic state-file rewrite (biggest win) — `base.py:143-149`, `273-333`\n\n`crawl()` calls `_save_state()` after **every single article**, and each call does `sorted(seen)` over the *entire* seen-URL history, then serializes and writes the whole list to disk:\n\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)      # O(n log n), n = ALL urls ever seen\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                # full JSON re-serialize + write, every article\n```\n\nFor a provider with 900 seen URLs saving 10 new articles, that's 10× a full sort of 900+ items and 10× a 144K JSON write — and it only gets worse as `seen_urls` grows across runs (already true for `malagasynews-mbs`, `lgdi-madagascar`, `lexpress-mg`). This is the closest analogue to an N+1 pattern here: work that should be O(new articles) is O(new articles × total history).\n\n**Fix:** keep `seen` unsorted (sorting is only for git-diff readability, not correctness) and checkpoint less aggressively, or maintain sort order incrementally:\n\n```python\n# sort only when writing seen_urls into a *new* provider's state, or on final save\nstate[\"seen_urls\"] = list(seen)  # order doesn't matter for a set-membership check\n...\n# checkpoint every article for durability (per the docstring's crash-safety rationale),\n# but avoid the O(n log n) resort each time:\nif url_is_new_high_water_mark or len(saved) % N == 0:  # or just drop sorted()\n```\nSimplest fix with no semantic change: just delete the `sorted()` call — `seen_urls` doesn't need to be sorted for `set(state.get(\"seen_urls\", []))` to work on the next load.\n\n## 2. Moov fetches every page twice — `providers.py:216-228` vs `base.py:174-175`\n\n`Moov.list_article_urls()` fetches each article page once to discover the link frontier, then `parse_article()` fetches the *same URL again* to extract content — 2× HTTP requests per article (already flagged in the code's own comment as a known tradeoff). Since `NewsSource` has no hook to pass a pre-fetched page into `parse_article`, this can't be fixed without a small interface change:\n\n```python\n# base.py — allow parse_article to accept an already-fetched page\ndef parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n# providers.py — Moov reuses the page it already fetched for frontier expansion\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        self._page_cache[url] = page   # or yield (url, page) and change crawl()'s contract\n        yield url\n```\nThis roughly halves Moov's network load. (Requires touching `crawl()`'s loop too since it currently only threads a bare URL through — worth doing only if Moov's volume grows.)\n\n## 3. `discover_sitemap_urls` uses `list.pop(0)` instead of a deque — `base.py:70-72`\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on every pop\n```\nFor Midi's ~118 sub-sitemaps this is a small but pointless O(n²) walk. `Moov`'s own crawler already uses `collections.deque` correctly (`providers.py:7,206`) — apply the same fix here:\n```python\nfrom collections import deque\nto_visit = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()\nto_visit.extend(locs)\n```\n\n## 4. Unbounded in-memory article accumulation — `base.py:284,309` + `main.py:21`\n\n`crawl()` builds `saved: list[Article]` and returns it, even though every article is already durably appended via `_append_article`/`on_save`. For `--limit 0` (explicitly documented as \"unlimited, run until exhausted\") this holds every article's full body text + image list in memory for the whole run, purely so `main.py` can print `len(articles)` at the end.\n\n**Fix:** track a counter instead of accumulating the objects, since the data is already on disk:\n```python\nsaved_count = 0\n...\nsaved_count += 1\n...\nif limit > 0 and saved_count >= limit:\n    ...\nreturn saved_count  # main.py already only uses len(articles)\n```\n\n## 5. Redundant `_load_state` scaling — `base.py:138-141`\n\nEvery run does `json.loads()` on the full state file, decoding all historical `seen_urls` into memory just to build a membership set. This is fine at current scale (hundreds of KB) but will not scale gracefully to tens of thousands of URLs — worth a `bloom filter` or a flat one-URL-per-line seen-file (append-only, no rewrite) if these sites' archives are crawled exhaustively later. Not urgent today; flagging since finding #1's fix removes the immediate pain, and this is the next bottleneck after that.\n\n## Not applicable here\n- **N+1 DB queries / React re-renders**: no database and no React/UI code exist in `apps/crawler` — it's a stdlib+scrapling scraper. If you meant a different app in the monorepo (there's an `apps/cli` directory and a `data/` pipeline elsewhere), point me at it and I'll redo this pass there.\n- **Memory leaks**: no obvious leaks (no long-lived caches, no unclosed handles — file writes use context managers throughout).\n\n**Priority:** fix #1 first (it's the only pattern that gets *worse over time* and is already measurably costing real I/O per the state file sizes above); #3 and #4 are cheap, no-risk cleanups; #2 is worth it only if Moov's crawl volume grows.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. Quadratic state-file rewrite (biggest win) — `base.py:143-149`, `273-333`",
+        "content": "\n`crawl()` calls `_save_state()` after **every single article**, and each call does `sorted(seen)` over the *entire* seen-URL history, then serializes and writes the whole list to disk:\n\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)      # O(n log n), n = ALL urls ever seen\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                # full JSON re-serialize + write, every article\n```\n\nFor a provider with 900 seen URLs saving 10 new articles, that's 10× a full sort of 900+ items and 10× a 144K JSON write — and it only gets worse as `seen_urls` grows across runs (already true for `malagasynews-mbs`, `lgdi-madagascar`, `lexpress-mg`). This is the closest analogue to an N+1 pattern here: work that should be O(new articles) is O(new articles × total history).\n\n**Fix:** keep `seen` unsorted (sorting is only for git-diff readability, not correctness) and checkpoint less aggressively, or maintain sort order incrementally:\n\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "sort only when writing seen_urls into a *new* provider's state, or on final save",
+        "content": "state[\"seen_urls\"] = list(seen)  # order doesn't matter for a set-membership check\n...\n",
+        "level": 1
+      },
+      {
+        "title": "checkpoint every article for durability (per the docstring's crash-safety rationale),",
+        "content": "",
+        "level": 1
+      },
+      {
+        "title": "but avoid the O(n log n) resort each time:",
+        "content": "if url_is_new_high_water_mark or len(saved) % N == 0:  # or just drop sorted()\n```\nSimplest fix with no semantic change: just delete the `sorted()` call — `seen_urls` doesn't need to be sorted for `set(state.get(\"seen_urls\", []))` to work on the next load.\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Moov fetches every page twice — `providers.py:216-228` vs `base.py:174-175`",
+        "content": "\n`Moov.list_article_urls()` fetches each article page once to discover the link frontier, then `parse_article()` fetches the *same URL again* to extract content — 2× HTTP requests per article (already flagged in the code's own comment as a known tradeoff). Since `NewsSource` has no hook to pass a pre-fetched page into `parse_article`, this can't be fixed without a small interface change:\n\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "base.py — allow parse_article to accept an already-fetched page",
+        "content": "def parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n",
+        "level": 1
+      },
+      {
+        "title": "providers.py — Moov reuses the page it already fetched for frontier expansion",
+        "content": "def list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        self._page_cache[url] = page   # or yield (url, page) and change crawl()'s contract\n        yield url\n```\nThis roughly halves Moov's network load. (Requires touching `crawl()`'s loop too since it currently only threads a bare URL through — worth doing only if Moov's volume grows.)\n\n",
+        "level": 1
+      },
+      {
+        "title": "3. `discover_sitemap_urls` uses `list.pop(0)` instead of a deque — `base.py:70-72`",
+        "content": "\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on every pop\n```\nFor Midi's ~118 sub-sitemaps this is a small but pointless O(n²) walk. `Moov`'s own crawler already uses `collections.deque` correctly (`providers.py:7,206`) — apply the same fix here:\n```python\nfrom collections import deque\nto_visit = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()\nto_visit.extend(locs)\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. Unbounded in-memory article accumulation — `base.py:284,309` + `main.py:21`",
+        "content": "\n`crawl()` builds `saved: list[Article]` and returns it, even though every article is already durably appended via `_append_article`/`on_save`. For `--limit 0` (explicitly documented as \"unlimited, run until exhausted\") this holds every article's full body text + image list in memory for the whole run, purely so `main.py` can print `len(articles)` at the end.\n\n**Fix:** track a counter instead of accumulating the objects, since the data is already on disk:\n```python\nsaved_count = 0\n...\nsaved_count += 1\n...\nif limit > 0 and saved_count >= limit:\n    ...\nreturn saved_count  # main.py already only uses len(articles)\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. Redundant `_load_state` scaling — `base.py:138-141`",
+        "content": "\nEvery run does `json.loads()` on the full state file, decoding all historical `seen_urls` into memory just to build a membership set. This is fine at current scale (hundreds of KB) but will not scale gracefully to tens of thousands of URLs — worth a `bloom filter` or a flat one-URL-per-line seen-file (append-only, no rewrite) if these sites' archives are crawled exhaustively later. Not urgent today; flagging since finding #1's fix removes the immediate pain, and this is the next bottleneck after that.\n\n",
+        "level": 2
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **N+1 DB queries / React re-renders**: no database and no React/UI code exist in `apps/crawler` — it's a stdlib+scrapling scraper. If you meant a different app in the monorepo (there's an `apps/cli` directory and a `data/` pipeline elsewhere), point me at it and I'll redo this pass there.\n- **Memory leaks**: no obvious leaks (no long-lived caches, no unclosed handles — file writes use context managers throughout).\n\n**Priority:** fix #1 first (it's the only pattern that gets *worse over time* and is already measurably costing real I/O per the state file sizes above); #3 and #4 are cheap, no-risk cleanups; #2 is worth it only if Moov's crawl volume grows.",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "seen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)      # O(n log n), n = ALL urls ever seen\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                # full JSON re-serialize + write, every article"
+      },
+      {
+        "language": "python",
+        "code": "# sort only when writing seen_urls into a *new* provider's state, or on final save\nstate[\"seen_urls\"] = list(seen)  # order doesn't matter for a set-membership check\n...\n# checkpoint every article for durability (per the docstring's crash-safety rationale),\n# but avoid the O(n log n) resort each time:\nif url_is_new_high_water_mark or len(saved) % N == 0:  # or just drop sorted()"
+      },
+      {
+        "language": "python",
+        "code": "# base.py — allow parse_article to accept an already-fetched page\ndef parse_article(self, url: str, page=None) -> Optional[Article]:\n    page = page or self.fetch(url)\n    ...\n\n# providers.py — Moov reuses the page it already fetched for frontier expansion\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        self._page_cache[url] = page   # or yield (url, page) and change crawl()'s contract\n        yield url"
+      },
+      {
+        "language": "python",
+        "code": "to_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on every pop"
+      },
+      {
+        "language": "python",
+        "code": "from collections import deque\nto_visit = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()\nto_visit.extend(locs)"
+      },
+      {
+        "language": "python",
+        "code": "saved_count = 0\n...\nsaved_count += 1\n...\nif limit > 0 and saved_count >= limit:\n    ...\nreturn saved_count  # main.py already only uses len(articles)"
+      }
+    ]
+  },
+  "durationMs": 114979,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:27:18.421Z",
+  "executionId": "optimize_1783967123442_wuv1zc"
+}

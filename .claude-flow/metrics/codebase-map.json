@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T18:52:19.305Z",
+  "projectRoot": "/Users/mac/Code/marindrano/kotofetsy",
+  "structure": {
+    "hasPackageJson": true,
+    "hasTsConfig": false,
+    "hasClaudeConfig": true,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1783968739305
+}

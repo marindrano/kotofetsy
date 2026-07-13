@@ -1,0 +1,69 @@
+[2026-07-13T18:38:38.999Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the codebase, here's the security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 36,\n      \"description\": \"Unchecked crawler-dir path parameter allows arbitrary directory traversal. User-supplied path is used directly without validation via cmd.Dir = crawlerDir (line 61), potentially allowing execution context from unexpected locations.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 42,\n      \"description\": \"Unvalidated provider names from user input in headless mode. Comma-separated provider names are split and passed to runCrawler() without checking against the hardcoded providers list, potentially allowing malicious provider names to be injected.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 35,\n      \"description\": \"No upper bound validation on limit parameter. User can pass arbitrarily large integer values (e.g., fmt.MaxInt64) causing potential resource exhaustion or DoS.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 60,\n      \"description\": \"Command execution with user-influenced arguments. The 'name' parameter is passed directly to exec.Command. While names come from a hardcoded list in TUI mode, headless mode accepts user input without strict validation.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 86,\n      \"description\": \"Error messages may leak sensitive information. Error details from runCrawler are printed directly without sanitization, potentially exposing system paths or internal error details.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"tui.go\",\n      \"line\": 269,\n      \"description\": \"Potential race condition on shared model state. Multiple goroutines call m.program.Send() without synchronization while Update() modifies m.statuses map concurrently, could cause undefined behavior or panics.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 61,\n      \"description\": \"No error handling for exec.Command setup. If cmd.Start() fails due to invalid crawlerDir, error handling occurs but path validation would have been better earlier.\"\n    }\n  ],\n  \"riskScore\": 38,\n  \"recommendations\": [\n    \"Validate crawlerDir is an absolute or relative path within project boundaries using filepath.Clean() and filepath.Abs(), then check it doesn't escape the project root using filepath.Rel().\",\n    \"In headless mode, validate each provider name against the hardcoded providers list before passing to runCrawler(). Use a whitelist approach: if name not in providers, return error.\",\n    \"Add upper bound validation for limit parameter. Recommend max value like 1000 or 10000 to prevent resource exhaustion attacks.\",\n    \"Sanitize error messages before displaying to users. Log full errors internally but show generic messages externally (e.g., 'Provider failed' instead of full stack traces).\",\n    \"Use filepath.Join() instead of direct path concatenation. This provides some protection against path traversal attempts.\",\n    \"Add mutex protection to model.statuses map access, or use channels instead of direct map access to avoid race conditions.\",\n    \"Consider using a context with timeout for exec.Command to prevent hung processes.\",\n    \"Add logging of all user inputs and command executions for audit trails and security monitoring.\"\n  ]\n}\n```\n\n**Key Issues Summary:**\n\n1. **Path Traversal (Medium)** — The `--crawler-dir` flag accepts any path without validation. A user could specify `../../../etc` or other sensitive directories.\n\n2. **Input Validation Gap (Medium)** — In headless mode, provider names from CSV input aren't validated against the whitelist, allowing arbitrary names to be passed to command execution.\n\n3. **Resource Exhaustion (Low)** — No upper bound on the `--limit` parameter could allow DoS via memory/disk consumption.\n\n4. **Data Race (Low)** — The TUI model's `statuses` map is accessed from multiple goroutines without synchronization.\n\n5. **Information Disclosure (Low)** — Raw error messages may leak sensitive system information.\n\nThe code has relatively low risk overall since it only executes Python via the `uv` tool runner (not arbitrary shells), but validation should be tightened on user inputs before passing to external processes.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 36,
+        "description": "Unchecked crawler-dir path parameter allows arbitrary directory traversal. User-supplied path is used directly without validation via cmd.Dir = crawlerDir (line 61), potentially allowing execution context from unexpected locations."
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 42,
+        "description": "Unvalidated provider names from user input in headless mode. Comma-separated provider names are split and passed to runCrawler() without checking against the hardcoded providers list, potentially allowing malicious provider names to be injected."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 35,
+        "description": "No upper bound validation on limit parameter. User can pass arbitrarily large integer values (e.g., fmt.MaxInt64) causing potential resource exhaustion or DoS."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 60,
+        "description": "Command execution with user-influenced arguments. The 'name' parameter is passed directly to exec.Command. While names come from a hardcoded list in TUI mode, headless mode accepts user input without strict validation."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 86,
+        "description": "Error messages may leak sensitive information. Error details from runCrawler are printed directly without sanitization, potentially exposing system paths or internal error details."
+      },
+      {
+        "severity": "low",
+        "file": "tui.go",
+        "line": 269,
+        "description": "Potential race condition on shared model state. Multiple goroutines call m.program.Send() without synchronization while Update() modifies m.statuses map concurrently, could cause undefined behavior or panics."
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 61,
+        "description": "No error handling for exec.Command setup. If cmd.Start() fails due to invalid crawlerDir, error handling occurs but path validation would have been better earlier."
+      }
+    ],
+    "riskScore": 38,
+    "recommendations": [
+      "Validate crawlerDir is an absolute or relative path within project boundaries using filepath.Clean() and filepath.Abs(), then check it doesn't escape the project root using filepath.Rel().",
+      "In headless mode, validate each provider name against the hardcoded providers list before passing to runCrawler(). Use a whitelist approach: if name not in providers, return error.",
+      "Add upper bound validation for limit parameter. Recommend max value like 1000 or 10000 to prevent resource exhaustion attacks.",
+      "Sanitize error messages before displaying to users. Log full errors internally but show generic messages externally (e.g., 'Provider failed' instead of full stack traces).",
+      "Use filepath.Join() instead of direct path concatenation. This provides some protection against path traversal attempts.",
+      "Add mutex protection to model.statuses map access, or use channels instead of direct map access to avoid race conditions.",
+      "Consider using a context with timeout for exec.Command to prevent hung processes.",
+      "Add logging of all user inputs and command executions for audit trails and security monitoring."
+    ]
+  },
+  "durationMs": 240038,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:38:38.999Z",
+  "executionId": "audit_1783967678961_8j9jh8"
+}

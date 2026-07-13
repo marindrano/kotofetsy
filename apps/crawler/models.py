@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -12,6 +12,9 @@ class Article:
     category: Optional[str]
     source: str
     scraped_at: str
+    cover_image: Optional[str] = None
+    embed_url: Optional[str] = None  # youtube/video iframe or <video> src, if any
+    images: list[str] = field(default_factory=list)  # all in-article images, absolute URLs, deduped
 
 
 @dataclass

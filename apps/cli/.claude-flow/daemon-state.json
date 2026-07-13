@@ -1,0 +1,178 @@
+{
+  "running": true,
+  "startedAt": "2026-07-13T13:50:29.374Z",
+  "workers": {
+    "map": {
+      "runCount": 13,
+      "successCount": 13,
+      "failureCount": 0,
+      "averageDurationMs": 2.1538461538461537,
+      "isRunning": false,
+      "nextRun": "2026-07-13T19:04:18.148Z",
+      "lastStartedAt": "2026-07-13T18:51:13.010Z",
+      "lastRun": "2026-07-13T18:51:13.015Z"
+    },
+    "audit": {
+      "runCount": 13,
+      "successCount": 13,
+      "failureCount": 0,
+      "averageDurationMs": 413961.07692307694,
+      "isRunning": true,
+      "nextRun": "2026-07-13T18:59:18.117Z",
+      "lastStartedAt": "2026-07-13T18:51:13.017Z",
+      "lastRun": "2026-07-13T18:49:47.570Z"
+    },
+    "optimize": {
+      "runCount": 13,
+      "successCount": 13,
+      "failureCount": 0,
+      "averageDurationMs": 257750.07692307694,
+      "isRunning": false,
+      "nextRun": "2026-07-13T19:04:18.148Z",
+      "lastStartedAt": "2026-07-13T18:51:13.015Z",
+      "lastRun": "2026-07-13T18:53:55.902Z"
+    },
+    "consolidate": {
+      "runCount": 7,
+      "successCount": 7,
+      "failureCount": 0,
+      "averageDurationMs": 1.2857142857142858,
+      "isRunning": false,
+      "nextRun": "2026-07-13T19:19:18.116Z",
+      "lastStartedAt": "2026-07-13T18:44:47.469Z",
+      "lastRun": "2026-07-13T18:44:47.470Z"
+    },
+    "testgaps": {
+      "runCount": 8,
+      "successCount": 8,
+      "failureCount": 0,
+      "averageDurationMs": 319613.25,
+      "isRunning": false,
+      "nextRun": "2026-07-13T19:03:41.792Z",
+      "lastStartedAt": "2026-07-13T18:51:13.011Z",
+      "lastRun": "2026-07-13T18:54:19.642Z"
+    },
+    "backup": {
+      "runCount": 1,
+      "successCount": 1,
+      "failureCount": 0,
+      "averageDurationMs": 2,
+      "isRunning": false,
+      "nextRun": "2026-07-14T14:00:29.375Z",
+      "lastStartedAt": "2026-07-13T18:38:39.000Z",
+      "lastRun": "2026-07-13T18:38:39.002Z"
+    },
+    "harness": {
+      "runCount": 1,
+      "successCount": 1,
+      "failureCount": 0,
+      "averageDurationMs": 4,
+      "isRunning": false,
+      "nextRun": "2026-07-13T20:02:29.370Z",
+      "lastStartedAt": "2026-07-13T18:38:39.001Z",
+      "lastRun": "2026-07-13T18:38:39.005Z"
+    },
+    "predict": {
+      "runCount": 0,
+      "successCount": 0,
+      "failureCount": 0,
+      "averageDurationMs": 0,
+      "isRunning": false
+    },
+    "document": {
+      "runCount": 0,
+      "successCount": 0,
+      "failureCount": 0,
+      "averageDurationMs": 0,
+      "isRunning": false
+    }
+  },
+  "config": {
+    "autoStart": false,
+    "logDir": "/Users/mac/Code/marindrano/kotofetsy/apps/cli/.claude-flow/logs",
+    "stateFile": "/Users/mac/Code/marindrano/kotofetsy/apps/cli/.claude-flow/daemon-state.json",
+    "maxConcurrent": 2,
+    "workerTimeoutMs": 960000,
+    "resourceThresholds": {
+      "maxCpuLoad": 8,
+      "minFreeMemoryPercent": 5
+    },
+    "ttlMs": 43200000,
+    "idleShutdownMs": 0,
+    "workers": [
+      {
+        "type": "map",
+        "intervalMs": 900000,
+        "offsetMs": 0,
+        "priority": "normal",
+        "description": "Codebase mapping",
+        "enabled": true
+      },
+      {
+        "type": "audit",
+        "intervalMs": 600000,
+        "offsetMs": 120000,
+        "priority": "critical",
+        "description": "Security analysis",
+        "enabled": true
+      },
+      {
+        "type": "optimize",
+        "intervalMs": 900000,
+        "offsetMs": 240000,
+        "priority": "high",
+        "description": "Performance optimization",
+        "enabled": true
+      },
+      {
+        "type": "consolidate",
+        "intervalMs": 1800000,
+        "offsetMs": 360000,
+        "priority": "low",
+        "description": "Memory distillation (ADR-174)",
+        "enabled": true
+      },
+      {
+        "type": "testgaps",
+        "intervalMs": 1200000,
+        "offsetMs": 480000,
+        "priority": "normal",
+        "description": "Test coverage analysis",
+        "enabled": true
+      },
+      {
+        "type": "backup",
+        "intervalMs": 86400000,
+        "offsetMs": 600000,
+        "priority": "low",
+        "description": "Nightly memory DB backup (WAL-safe, rotated)",
+        "enabled": true
+      },
+      {
+        "type": "harness",
+        "intervalMs": 21600000,
+        "offsetMs": 720000,
+        "priority": "low",
+        "description": "Self-optimizing harness loop (opt-in RUFLO_HARNESS_LOOP, $0-default)",
+        "enabled": true
+      },
+      {
+        "type": "predict",
+        "intervalMs": 600000,
+        "offsetMs": 0,
+        "priority": "low",
+        "description": "Predictive preloading",
+        "enabled": false
+      },
+      {
+        "type": "document",
+        "intervalMs": 3600000,
+        "offsetMs": 0,
+        "priority": "low",
+        "description": "Auto-documentation",
+        "enabled": false
+      }
+    ]
+  },
+  "savedAt": "2026-07-13T18:54:19.642Z"
+}

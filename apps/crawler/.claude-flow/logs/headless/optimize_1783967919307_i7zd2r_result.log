@@ -1,0 +1,110 @@
+[2026-07-13T18:40:20.711Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Codebase context\n\nThis is a Python web-crawler (`apps/crawler`), not a React/DB-backed app — `base.py` (crawl pipeline), `providers.py` (11 site-specific scrapers), `models.py`, `main.py`. So \"N+1 queries\" and \"React re-renders\" don't literally apply; I've mapped your categories to their closest real analogues here (redundant HTTP fetches, quadratic file I/O, regex recompilation) and skipped what genuinely isn't present.\n\n## 1. \"N+1\"-equivalent: redundant HTTP fetches\n\n**`providers.py:212-236` (Moov)** — every article page is fetched **twice**: once in `list_article_urls()` to expand the BFS frontier, once again in `parse_article()` via `self.fetch(url)`. The code even acknowledges this in a comment but doesn't fix it.\n\n```python\n# current: fetched once for links, discarded, then re-fetched in parse_article\nwhile queue:\n    url = queue.popleft()\n    yield url\n    page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})  # fetch #1\n    for link in page.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n# parse_article() then does fetch #2 on the same url\n```\n\n**Fix**: cache the already-fetched page and let `parse_article` reuse it, or extract links from the same `page` object your `parse_article` will build anyway (e.g. pass the fetched page through, or maintain a small `url -> page` dict cleared as consumed).\n\n## 2. Quadratic state writes (biggest real hotspot)\n\n**`base.py:283-323`** — `crawl()` calls `_save_state()` after **every single article/skip**, and each call does:\n\n```python\nstate[\"seen_urls\"] = sorted(seen)      # O(N log N), recomputed every article\nself._save_state(state)                # full JSON re-serialize + write of the WHOLE seen_urls list\n```\n\nFor a source with e.g. 10k seen URLs, saving article #10,001 re-sorts and re-serializes all 10,000 prior URLs just to persist one more. Over a big backfill (`--limit 0`) this is O(N²) work and O(N²) disk writes.\n\n**Fix**:\n```python\n# keep seen_urls as a sorted list once, append+bisect.insort per new URL instead of full re-sort\nimport bisect\n...\nbisect.insort(seen_sorted_list, url)   # O(N) insert, no full sort\nstate[\"seen_urls\"] = seen_sorted_list\n```\nOr simpler: only persist state every K articles (e.g. every 5) instead of every 1, trading a slightly larger crash-loss window for far less I/O — matches the existing \"resumable\" design intent without the per-article cost.\n\n## 3. Redundant computation: double `get_all_text()` call\n\n**`base.py:183-187`**\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← computed again, discarded\n)\n```\n\n`get_all_text(strip=True)` runs twice per paragraph (once to filter, once to yield). Fix:\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)\n```\n\n## 4. Regex recompiled on every call\n\n**`base.py:93,97,109`** — `parse_french_date`/`parse_numeric_date` call `re.search(r\"...\")` with a fresh pattern literal on every invocation (once per article, across every provider that sets `published_date_format`). Python does cache compiled patterns internally, but it's still a dict lookup + cache-hit path per call, and the intent isn't explicit. Precompile at module level:\n\n```python\n_FRENCH_DATE_RE = re.compile(r\"(\\d{1,2})\\s+(\\w+)\\s+(\\d{4})\")\n_FRENCH_DATE_ALT_RE = re.compile(r\"(\\w+)\\s+(\\d{1,2}),?\\s+(\\d{4})\")\n_NUMERIC_DATE_RE = re.compile(r\"(\\d{1,2})/(\\d{1,2})/(\\d{4})\")\n```\n\n## 5. O(n²) BFS traversal in sitemap discovery\n\n**`base.py:70-72`**\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list — O(n²) total for n sub-sitemaps\n```\n\nMidi has ~118 sub-sitemaps per the docstring, so this is minor today, but it's an easy fix and the pattern will bite harder if any provider's sitemap index grows:\n\n```python\nfrom collections import deque\nto_visit = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()   # O(1)\n```\n\n## 6. Caching opportunity: no HTTP session reuse\n\n**`base.py:48-51`** (`_fetch_xml`) and **`providers.py:177-180`** (FreeNews) each open a brand-new `urllib.request.urlopen` call with no connection pooling/keep-alive across the many sequential sitemap-index or paginated-API requests to the *same host*. Since `Fetcher`/`StealthyFetcher` (scrapling) are used elsewhere and likely already pool connections, these two raw-`urllib` call sites are the odd ones out. Switching to a persistent `requests.Session()` (or reusing one urllib `http.client.HTTPSConnection`) would cut TCP/TLS handshake overhead on the sitemap walk (Midi: ~118 fetches) and FreeNews's ~32 paginated API calls.\n\n## 7. Unbounded growth (not a \"leak\" in-process, but worth flagging)\n\n`state[\"seen_urls\"]` grows forever and is fully loaded/held/re-sorted every run (`base.py:138-141`, `283`). There's no pruning/archival strategy — over months of crawling, `_load_state()` + the in-memory `seen` set + the per-save `sorted()` cost will scale linearly with total-articles-ever-seen, not with this run's work. If this becomes a real cost, consider moving `seen_urls` to a separate append-only file (or a small on-disk index/SQLite set) rather than one JSON blob rewritten wholesale each save — this pairs naturally with fixing #2.\n\n## Not applicable here\n- **N+1 DB queries**: no database in this codebase.\n- **React re-renders**: no frontend code in `apps/crawler`.\n\n**Priority order**: #2 (quadratic state save) is the clearest win for any long/unlimited crawl run, followed by #1 (Moov double-fetch) since it doubles that provider's network cost outright. #3 and #4 are cheap, safe cleanups.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Codebase context",
+        "content": "\nThis is a Python web-crawler (`apps/crawler`), not a React/DB-backed app — `base.py` (crawl pipeline), `providers.py` (11 site-specific scrapers), `models.py`, `main.py`. So \"N+1 queries\" and \"React re-renders\" don't literally apply; I've mapped your categories to their closest real analogues here (redundant HTTP fetches, quadratic file I/O, regex recompilation) and skipped what genuinely isn't present.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. \"N+1\"-equivalent: redundant HTTP fetches",
+        "content": "\n**`providers.py:212-236` (Moov)** — every article page is fetched **twice**: once in `list_article_urls()` to expand the BFS frontier, once again in `parse_article()` via `self.fetch(url)`. The code even acknowledges this in a comment but doesn't fix it.\n\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "current: fetched once for links, discarded, then re-fetched in parse_article",
+        "content": "while queue:\n    url = queue.popleft()\n    yield url\n    page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})  # fetch #1\n    for link in page.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n",
+        "level": 1
+      },
+      {
+        "title": "parse_article() then does fetch #2 on the same url",
+        "content": "```\n\n**Fix**: cache the already-fetched page and let `parse_article` reuse it, or extract links from the same `page` object your `parse_article` will build anyway (e.g. pass the fetched page through, or maintain a small `url -> page` dict cleared as consumed).\n\n",
+        "level": 1
+      },
+      {
+        "title": "2. Quadratic state writes (biggest real hotspot)",
+        "content": "\n**`base.py:283-323`** — `crawl()` calls `_save_state()` after **every single article/skip**, and each call does:\n\n```python\nstate[\"seen_urls\"] = sorted(seen)      # O(N log N), recomputed every article\nself._save_state(state)                # full JSON re-serialize + write of the WHOLE seen_urls list\n```\n\nFor a source with e.g. 10k seen URLs, saving article #10,001 re-sorts and re-serializes all 10,000 prior URLs just to persist one more. Over a big backfill (`--limit 0`) this is O(N²) work and O(N²) disk writes.\n\n**Fix**:\n```python\n",
+        "level": 2
+      },
+      {
+        "title": "keep seen_urls as a sorted list once, append+bisect.insort per new URL instead of full re-sort",
+        "content": "import bisect\n...\nbisect.insort(seen_sorted_list, url)   # O(N) insert, no full sort\nstate[\"seen_urls\"] = seen_sorted_list\n```\nOr simpler: only persist state every K articles (e.g. every 5) instead of every 1, trading a slightly larger crash-loss window for far less I/O — matches the existing \"resumable\" design intent without the per-article cost.\n\n",
+        "level": 1
+      },
+      {
+        "title": "3. Redundant computation: double `get_all_text()` call",
+        "content": "\n**`base.py:183-187`**\n\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← computed again, discarded\n)\n```\n\n`get_all_text(strip=True)` runs twice per paragraph (once to filter, once to yield). Fix:\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. Regex recompiled on every call",
+        "content": "\n**`base.py:93,97,109`** — `parse_french_date`/`parse_numeric_date` call `re.search(r\"...\")` with a fresh pattern literal on every invocation (once per article, across every provider that sets `published_date_format`). Python does cache compiled patterns internally, but it's still a dict lookup + cache-hit path per call, and the intent isn't explicit. Precompile at module level:\n\n```python\n_FRENCH_DATE_RE = re.compile(r\"(\\d{1,2})\\s+(\\w+)\\s+(\\d{4})\")\n_FRENCH_DATE_ALT_RE = re.compile(r\"(\\w+)\\s+(\\d{1,2}),?\\s+(\\d{4})\")\n_NUMERIC_DATE_RE = re.compile(r\"(\\d{1,2})/(\\d{1,2})/(\\d{4})\")\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. O(n²) BFS traversal in sitemap discovery",
+        "content": "\n**`base.py:70-72`**\n\n```python\nto_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list — O(n²) total for n sub-sitemaps\n```\n\nMidi has ~118 sub-sitemaps per the docstring, so this is minor today, but it's an easy fix and the pattern will bite harder if any provider's sitemap index grows:\n\n```python\nfrom collections import deque\nto_visit = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()   # O(1)\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "6. Caching opportunity: no HTTP session reuse",
+        "content": "\n**`base.py:48-51`** (`_fetch_xml`) and **`providers.py:177-180`** (FreeNews) each open a brand-new `urllib.request.urlopen` call with no connection pooling/keep-alive across the many sequential sitemap-index or paginated-API requests to the *same host*. Since `Fetcher`/`StealthyFetcher` (scrapling) are used elsewhere and likely already pool connections, these two raw-`urllib` call sites are the odd ones out. Switching to a persistent `requests.Session()` (or reusing one urllib `http.client.HTTPSConnection`) would cut TCP/TLS handshake overhead on the sitemap walk (Midi: ~118 fetches) and FreeNews's ~32 paginated API calls.\n\n",
+        "level": 2
+      },
+      {
+        "title": "7. Unbounded growth (not a \"leak\" in-process, but worth flagging)",
+        "content": "\n`state[\"seen_urls\"]` grows forever and is fully loaded/held/re-sorted every run (`base.py:138-141`, `283`). There's no pruning/archival strategy — over months of crawling, `_load_state()` + the in-memory `seen` set + the per-save `sorted()` cost will scale linearly with total-articles-ever-seen, not with this run's work. If this becomes a real cost, consider moving `seen_urls` to a separate append-only file (or a small on-disk index/SQLite set) rather than one JSON blob rewritten wholesale each save — this pairs naturally with fixing #2.\n\n",
+        "level": 2
+      },
+      {
+        "title": "Not applicable here",
+        "content": "- **N+1 DB queries**: no database in this codebase.\n- **React re-renders**: no frontend code in `apps/crawler`.\n\n**Priority order**: #2 (quadratic state save) is the clearest win for any long/unlimited crawl run, followed by #1 (Moov double-fetch) since it doubles that provider's network cost outright. #3 and #4 are cheap, safe cleanups.",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "python",
+        "code": "# current: fetched once for links, discarded, then re-fetched in parse_article\nwhile queue:\n    url = queue.popleft()\n    yield url\n    page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})  # fetch #1\n    for link in page.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n# parse_article() then does fetch #2 on the same url"
+      },
+      {
+        "language": "python",
+        "code": "state[\"seen_urls\"] = sorted(seen)      # O(N log N), recomputed every article\nself._save_state(state)                # full JSON re-serialize + write of the WHOLE seen_urls list"
+      },
+      {
+        "language": "python",
+        "code": "# keep seen_urls as a sorted list once, append+bisect.insort per new URL instead of full re-sort\nimport bisect\n...\nbisect.insort(seen_sorted_list, url)   # O(N) insert, no full sort\nstate[\"seen_urls\"] = seen_sorted_list"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # ← computed again, discarded\n)"
+      },
+      {
+        "language": "python",
+        "code": "body = \"\\n\\n\".join(\n    text\n    for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)"
+      },
+      {
+        "language": "python",
+        "code": "_FRENCH_DATE_RE = re.compile(r\"(\\d{1,2})\\s+(\\w+)\\s+(\\d{4})\")\n_FRENCH_DATE_ALT_RE = re.compile(r\"(\\w+)\\s+(\\d{1,2}),?\\s+(\\d{4})\")\n_NUMERIC_DATE_RE = re.compile(r\"(\\d{1,2})/(\\d{1,2})/(\\d{4})\")"
+      },
+      {
+        "language": "python",
+        "code": "to_visit = [sitemap_url]\nwhile to_visit:\n    current = to_visit.pop(0)   # O(n) shift on a list — O(n²) total for n sub-sitemaps"
+      },
+      {
+        "language": "python",
+        "code": "from collections import deque\nto_visit = deque([sitemap_url])\n...\ncurrent = to_visit.popleft()   # O(1)"
+      }
+    ]
+  },
+  "durationMs": 101404,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:40:20.711Z",
+  "executionId": "optimize_1783967919307_i7zd2r"
+}

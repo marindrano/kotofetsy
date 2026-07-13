@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T18:56:08.071Z",
+  "projectRoot": "/Users/mac/Code/marindrano/kotofetsy/apps/crawler",
+  "structure": {
+    "hasPackageJson": false,
+    "hasTsConfig": false,
+    "hasClaudeConfig": false,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1783968968071
+}

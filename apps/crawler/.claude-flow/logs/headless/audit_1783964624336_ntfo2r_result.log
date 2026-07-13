@@ -1,0 +1,17 @@
+[2026-07-13T17:58:59.076Z] RESULT
+============================================================
+{
+  "success": false,
+  "output": "API Error: Connection closed mid-response. The response above may be incomplete.\n",
+  "parsedOutput": {
+    "parseError": true,
+    "rawOutput": "API Error: Connection closed mid-response. The response above may be incomplete.\n"
+  },
+  "durationMs": 914740,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T17:58:59.076Z",
+  "executionId": "audit_1783964624336_ntfo2r",
+  "error": "Execution timed out after 300000ms"
+}

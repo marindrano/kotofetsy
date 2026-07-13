@@ -1,0 +1,65 @@
+[2026-07-13T18:47:44.267Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js\",\n      \"line\": 24,\n      \"description\": \"Environment variable PW_INSTRUMENT_MODULES enables arbitrary code instrumentation via Module._load monkey-patching. An attacker who can set environment variables could inject instrumentation logic, leading to code execution.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 84,\n      \"description\": \"Socket connection to this.config.socketPath accepts user-controlled socket paths without validation. If config is loaded from untrusted sources, this could allow connection hijacking or local privilege escalation.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 68,\n      \"description\": \"Session name used in file path construction (entry.config.name + '.session') without path traversal validation. Although limited by directory scoping, directory traversal payloads could escape intended directory.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js\",\n      \"line\": 142,\n      \"description\": \"Command execution via child_process.spawn without explicit shell escaping. While the command is internally controlled, future refactoring to accept user input could introduce shell injection.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js\",\n      \"line\": 68,\n      \"description\": \"Socket timeout of 250ms may be too short for legitimate operations on slow systems, potentially causing denial of service through timeout-based disconnections.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/output.js\",\n      \"line\": 38,\n      \"description\": \"Error messages printed directly to stderr without sanitization. Stack traces or error details could leak sensitive path information or internal implementation details.\"\n    }\n  ],\n  \"riskScore\": 32,\n  \"recommendations\": [\n    \"Disable PW_INSTRUMENT_MODULES in production or restrict it to specific approved modules only. Validate that instrumentation whitelist is hardcoded, not environment-variable driven.\",\n    \"Add explicit validation for socket paths: ensure they are within expected directories and reject paths containing '..' or other traversal attempts.\",\n    \"Implement path validation utility for all file operations: use path.resolve() and verify the result is within expected base directory.\",\n    \"Add timeout handling and max retry limits for socket connections to prevent resource exhaustion.\",\n    \"Sanitize error messages before logging; avoid exposing file paths, socket locations, or implementation details.\",\n    \"Add input validation for sessionName parameter across all call sites to ensure only alphanumeric characters, hyphens, and underscores are accepted.\",\n    \"Update minimist dependency to latest version (known vulnerabilities in older versions).\",\n    \"Add process.env validation: use a whitelist of allowed environment variables rather than trusting arbitrary env vars.\",\n    \"Implement integrity checks for config files (registry entries) using cryptographic signatures.\",\n    \"Add security-focused logging/auditing for socket connections and file access patterns.\"\n  ]\n}\n```\n\n**Summary**: This is Playwright/Patchright browser automation library code with **low-to-medium risk**. The primary concerns are environment variable-based code instrumentation, unvalidated socket paths, and potential path traversal in file operations. However, since this is infrastructure/daemon code (not a web service), the attack surface is limited to local users with OS-level access. The codebase lacks robust input validation patterns but contains no obvious hardcoded secrets, SQL injection, or network-exposed XSS vulnerabilities.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js",
+        "line": 24,
+        "description": "Environment variable PW_INSTRUMENT_MODULES enables arbitrary code instrumentation via Module._load monkey-patching. An attacker who can set environment variables could inject instrumentation logic, leading to code execution."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 84,
+        "description": "Socket connection to this.config.socketPath accepts user-controlled socket paths without validation. If config is loaded from untrusted sources, this could allow connection hijacking or local privilege escalation."
+      },
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 68,
+        "description": "Session name used in file path construction (entry.config.name + '.session') without path traversal validation. Although limited by directory scoping, directory traversal payloads could escape intended directory."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/program.js",
+        "line": 142,
+        "description": "Command execution via child_process.spawn without explicit shell escaping. While the command is internally controlled, future refactoring to accept user input could introduce shell injection."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js",
+        "line": 68,
+        "description": "Socket timeout of 250ms may be too short for legitimate operations on slow systems, potentially causing denial of service through timeout-based disconnections."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/output.js",
+        "line": 38,
+        "description": "Error messages printed directly to stderr without sanitization. Stack traces or error details could leak sensitive path information or internal implementation details."
+      }
+    ],
+    "riskScore": 32,
+    "recommendations": [
+      "Disable PW_INSTRUMENT_MODULES in production or restrict it to specific approved modules only. Validate that instrumentation whitelist is hardcoded, not environment-variable driven.",
+      "Add explicit validation for socket paths: ensure they are within expected directories and reject paths containing '..' or other traversal attempts.",
+      "Implement path validation utility for all file operations: use path.resolve() and verify the result is within expected base directory.",
+      "Add timeout handling and max retry limits for socket connections to prevent resource exhaustion.",
+      "Sanitize error messages before logging; avoid exposing file paths, socket locations, or implementation details.",
+      "Add input validation for sessionName parameter across all call sites to ensure only alphanumeric characters, hyphens, and underscores are accepted.",
+      "Update minimist dependency to latest version (known vulnerabilities in older versions).",
+      "Add process.env validation: use a whitelist of allowed environment variables rather than trusting arbitrary env vars.",
+      "Implement integrity checks for config files (registry entries) using cryptographic signatures.",
+      "Add security-focused logging/auditing for socket connections and file access patterns."
+    ]
+  },
+  "durationMs": 85438,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:47:44.267Z",
+  "executionId": "audit_1783968378829_ciszip"
+}

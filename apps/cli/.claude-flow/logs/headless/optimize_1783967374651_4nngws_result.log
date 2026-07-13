@@ -1,0 +1,59 @@
+[2026-07-13T18:32:28.879Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "I don't have access outside `apps/cli` in this session, so I'll base the process-spawn observation on `main.go`/`tui.go` alone (each provider is invoked as a separate `uv run main.py <name>` subprocess — confirmed from the code I can read) without asserting what the crawler's batch-mode support looks like internally.\n\nBased on reading `main.go` and `tui.go` (524 lines total, a Bubble Tea TUI — this is a Go CLI, not React/a database-backed service, so I'm mapping your categories to their closest Go analogs):\n\n## 1. Quadratic redundant computation — `refreshViewport` (tui.go:245-252)\n\n```go\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n\tm.vp.GotoBottom()\n}\n```\n\nEvery time a `statusMsg` arrives for the highlighted provider, this **rebuilds the entire log string from scratch** via `strings.Join`. For a provider with `n` accumulated lines, appending line `n+1` costs O(n). Over a full run this is O(n²) total work, and `lines` grows unboundedly (no cap) for `--limit 0` runs.\n\n**Fix — append incrementally instead of rejoining:**\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tcontent strings.Builder // append-only cache\n}\n\nfunc (m *model) appendLine(name, line string) {\n\tst := m.statuses[name]\n\tst.lines = append(st.lines, line)\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(line)\n}\n\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}\n```\n\n## 2. Redundant recomputation on every render — `articlesSaved` (tui.go:360-368, called at tui.go:398)\n\n```go\nfunc (m *model) viewRunning() string {\n\t...\n\tfor i, name := range m.runOrder {\n\t\t...\n\t\tcount := articlesSaved(st.lines) // rescans ALL lines for EVERY provider\n```\n\n`View()` is called on **every** `spinner.TickMsg` (fires continuously while any provider is running) and rescans every line of every provider's full history with a string-prefix check, every single frame. This is the closest analog to an N+1: O(providers × total accumulated lines) work repeated many times per second for a value that only actually changes when a new `\"  - \"` line arrives.\n\n**Fix — maintain a running counter, updated once per incoming line:**\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tsaved   int // incremented once per matching line\n}\n\n// in the statusMsg case of Update():\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n\tst.saved++\n}\n```\nThen `viewRunning` reads `st.saved` directly — O(1) per provider instead of O(lines).\n\n## 3. Process-spawn overhead (N+1 analog) — `runCrawler`/`startRun` (main.go:59-78, tui.go:254-274)\n\nEach selected provider spawns its **own** `uv run main.py <name>` subprocess (main.go:60). That's `uv`'s dependency-resolution + Python interpreter startup cost paid once per provider (up to 11x for \"all\"), rather than one warm process handling every provider in a loop. If `apps/crawler/main.py` can accept multiple provider names in one invocation, batching into a single subprocess (or a small pool) would cut that fixed per-process overhead by ~10x for full runs. I couldn't verify this from `apps/cli` alone — worth checking `apps/crawler/main.py`'s arg parsing.\n\n## 4. Unbounded memory growth\n\n`providerStatus.lines` (tui.go:36) accumulates every stdout line for the life of the run with no cap — for `--limit 0` (\"run until exhausted\") this is unbounded. Combined with issue #1, memory and CPU both scale with total output. Consider capping displayed history (e.g. keep last N lines for the viewport) while keeping the `saved` counter (fix #2) independent of the retained line count.\n\n## 5. No subprocess cancellation/timeout (resource-leak risk)\n\n`exec.Command` in `runCrawler` (main.go:60) is created with no `context.Context` and no timeout. If a provider hangs, `cmd.Wait()` blocks its goroutine forever — and the UI has no way to kill it (`q`/`ctrl+c` are no-ops while `m.pending != 0`, handleKey tui.go:147-150). If the parent process is ever force-killed externally, these children can be orphaned.\n\n**Fix:** use `exec.CommandContext` with a per-provider timeout, and wire `ctrl+c` while running to cancel contexts and forcibly quit rather than blocking.\n\n---\n\n**Not applicable to this codebase:** no database (no N+1 queries in the SQL sense), no React (Bubble Tea's `View()` is full-redraw-by-design, so \"unnecessary re-renders\" isn't the right frame — the fix is making what's redrawn cheap, which is #1/#2 above).\n\nWant me to apply fixes #1 and #2 (the two concrete, low-risk ones)?\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. Quadratic redundant computation — `refreshViewport` (tui.go:245-252)",
+        "content": "\n```go\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n\tm.vp.GotoBottom()\n}\n```\n\nEvery time a `statusMsg` arrives for the highlighted provider, this **rebuilds the entire log string from scratch** via `strings.Join`. For a provider with `n` accumulated lines, appending line `n+1` costs O(n). Over a full run this is O(n²) total work, and `lines` grows unboundedly (no cap) for `--limit 0` runs.\n\n**Fix — append incrementally instead of rejoining:**\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tcontent strings.Builder // append-only cache\n}\n\nfunc (m *model) appendLine(name, line string) {\n\tst := m.statuses[name]\n\tst.lines = append(st.lines, line)\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(line)\n}\n\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "2. Redundant recomputation on every render — `articlesSaved` (tui.go:360-368, called at tui.go:398)",
+        "content": "\n```go\nfunc (m *model) viewRunning() string {\n\t...\n\tfor i, name := range m.runOrder {\n\t\t...\n\t\tcount := articlesSaved(st.lines) // rescans ALL lines for EVERY provider\n```\n\n`View()` is called on **every** `spinner.TickMsg` (fires continuously while any provider is running) and rescans every line of every provider's full history with a string-prefix check, every single frame. This is the closest analog to an N+1: O(providers × total accumulated lines) work repeated many times per second for a value that only actually changes when a new `\"  - \"` line arrives.\n\n**Fix — maintain a running counter, updated once per incoming line:**\n```go\ntype providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tsaved   int // incremented once per matching line\n}\n\n// in the statusMsg case of Update():\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n\tst.saved++\n}\n```\nThen `viewRunning` reads `st.saved` directly — O(1) per provider instead of O(lines).\n\n",
+        "level": 2
+      },
+      {
+        "title": "3. Process-spawn overhead (N+1 analog) — `runCrawler`/`startRun` (main.go:59-78, tui.go:254-274)",
+        "content": "\nEach selected provider spawns its **own** `uv run main.py <name>` subprocess (main.go:60). That's `uv`'s dependency-resolution + Python interpreter startup cost paid once per provider (up to 11x for \"all\"), rather than one warm process handling every provider in a loop. If `apps/crawler/main.py` can accept multiple provider names in one invocation, batching into a single subprocess (or a small pool) would cut that fixed per-process overhead by ~10x for full runs. I couldn't verify this from `apps/cli` alone — worth checking `apps/crawler/main.py`'s arg parsing.\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. Unbounded memory growth",
+        "content": "\n`providerStatus.lines` (tui.go:36) accumulates every stdout line for the life of the run with no cap — for `--limit 0` (\"run until exhausted\") this is unbounded. Combined with issue #1, memory and CPU both scale with total output. Consider capping displayed history (e.g. keep last N lines for the viewport) while keeping the `saved` counter (fix #2) independent of the retained line count.\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. No subprocess cancellation/timeout (resource-leak risk)",
+        "content": "`exec.Command` in `runCrawler` (main.go:60) is created with no `context.Context` and no timeout. If a provider hangs, `cmd.Wait()` blocks its goroutine forever — and the UI has no way to kill it (`q`/`ctrl+c` are no-ops while `m.pending != 0`, handleKey tui.go:147-150). If the parent process is ever force-killed externally, these children can be orphaned.\n\n**Fix:** use `exec.CommandContext` with a per-provider timeout, and wire `ctrl+c` while running to cancel contexts and forcibly quit rather than blocking.\n\n---\n\n**Not applicable to this codebase:** no database (no N+1 queries in the SQL sense), no React (Bubble Tea's `View()` is full-redraw-by-design, so \"unnecessary re-renders\" isn't the right frame — the fix is making what's redrawn cheap, which is #1/#2 above).\n\nWant me to apply fixes #1 and #2 (the two concrete, low-risk ones)?",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "func (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n\tm.vp.GotoBottom()\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tcontent strings.Builder // append-only cache\n}\n\nfunc (m *model) appendLine(name, line string) {\n\tst := m.statuses[name]\n\tst.lines = append(st.lines, line)\n\tif st.content.Len() > 0 {\n\t\tst.content.WriteByte('\\n')\n\t}\n\tst.content.WriteString(line)\n}\n\nfunc (m *model) refreshViewport() {\n\tname := m.highlighted()\n\tif name == \"\" {\n\t\treturn\n\t}\n\tm.vp.SetContent(m.statuses[name].content.String())\n\tm.vp.GotoBottom()\n}"
+      },
+      {
+        "language": "go",
+        "code": "func (m *model) viewRunning() string {\n\t...\n\tfor i, name := range m.runOrder {\n\t\t...\n\t\tcount := articlesSaved(st.lines) // rescans ALL lines for EVERY provider"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n\tstate   providerState\n\tlines   []string\n\tsaved   int // incremented once per matching line\n}\n\n// in the statusMsg case of Update():\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n\tst.saved++\n}"
+      }
+    ]
+  },
+  "durationMs": 174227,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T18:32:28.878Z",
+  "executionId": "optimize_1783967374651_4nngws"
+}
