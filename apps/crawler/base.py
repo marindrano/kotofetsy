@@ -46,17 +46,29 @@ FRENCH_MONTHS = {
 }
 
 
-def _fetch_xml(url: str) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        raw = resp.read()
-        # Some servers (Sucuri cache hits observed on Midi) send gzip regardless of
-        # the Accept-Encoding we ask for, so sniff the magic bytes rather than trust headers.
-        if raw[:2] == b"\x1f\x8b":
-            raw = gzip.decompress(raw)
-        # Midi's cached response has a stray leading newline before the XML
-        # declaration, which ElementTree refuses to parse — strip it.
-        return raw.decode("utf-8", errors="replace").lstrip()
+def _fetch_xml(url: str, retries: int = 3) -> str:
+    # Retries with backoff: running 11+ providers concurrently saturates the network enough
+    # that SSL handshakes transiently time out under load (observed in practice, not a bug
+    # in any one site) — a plain retry clears most of these rather than killing the whole
+    # provider's run over what was really just contention.
+    last_exc: Exception = RuntimeError("unreachable")
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+                # Some servers (Sucuri cache hits observed on Midi) send gzip regardless of
+                # the Accept-Encoding we ask for, so sniff the magic bytes rather than trust headers.
+                if raw[:2] == b"\x1f\x8b":
+                    raw = gzip.decompress(raw)
+                # Midi's cached response has a stray leading newline before the XML
+                # declaration, which ElementTree refuses to parse — strip it.
+                return raw.decode("utf-8", errors="replace").lstrip()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(2**attempt)  # 1s, 2s
+    raise last_exc
 
 
 def discover_sitemap_urls(sitemap_url: str) -> Iterator[str]:
