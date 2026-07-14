@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-13T18:51:13.010Z",
+  "timestamp": "2026-07-14T04:24:34.277Z",
   "projectRoot": "/Users/mac/Code/marindrano/kotofetsy/apps/cli",
   "structure": {
     "hasPackageJson": false,
@@ -7,5 +7,5 @@
     "hasClaudeConfig": false,
     "hasClaudeFlow": true
   },
-  "scannedAt": 1783968673010
+  "scannedAt": 1784003074277
 }

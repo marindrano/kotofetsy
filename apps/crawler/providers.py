@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from collections import deque
@@ -170,18 +171,28 @@ class FreeNews(NewsSource):
     # the extra per-article fetch ever becomes a problem.
     _api = "https://www.freenews.mg/wp-json/wp/v2/posts"
 
+    def _fetch_page(self, page: int, retries: int = 3):
+        api = f"{self._api}?per_page=100&page={page}&_fields=link"
+        last_exc: Exception = RuntimeError("unreachable")
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(api, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.loads(resp.read())
+            except urllib.error.HTTPError as exc:
+                if exc.code == 400:  # WP's rest_post_invalid_page_number — we're past the last page
+                    return None
+                last_exc = exc
+            except Exception as exc:  # transient network failure — retry like _fetch_xml does
+                last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(2**attempt)
+        raise last_exc
+
     def list_article_urls(self):
         page = 1
         while True:
-            api = f"{self._api}?per_page=100&page={page}&_fields=link"
-            req = urllib.request.Request(api, headers={"User-Agent": USER_AGENT})
-            try:
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    posts = json.loads(resp.read())
-            except urllib.error.HTTPError as exc:
-                if exc.code == 400:  # WP's rest_post_invalid_page_number — we're past the last page
-                    break
-                raise
+            posts = self._fetch_page(page)
             if not posts:
                 break
             for post in posts:

@@ -1,64 +1,12 @@
 {
-  "timestamp": "2026-07-13T18:55:50.173Z",
-  "mode": "headless",
-  "workerType": "audit",
-  "model": "haiku",
-  "durationMs": 108011,
-  "executionId": "audit_1783968842162_3ajvcf",
-  "success": true,
-  "findings": {
-    "vulnerabilities": [
-      {
-        "severity": "high",
-        "file": ".agents/skills/impeccable/scripts/live-browser.js",
-        "line": 40,
-        "description": "Insufficient token/port validation. Global variables __IMPECCABLE_TOKEN__ and __IMPECCABLE_PORT__ are checked for existence but not format/content validation. Attackers controlling global scope could inject malicious values. Token should be validated against expected format before use."
-      },
-      {
-        "severity": "high",
-        "file": ".agents/skills/impeccable/scripts/live-browser-session.js",
-        "line": 16,
-        "description": "Weak session ID generation fallback. Uses Math.random().toString(16).slice(2, 10) as fallback instead of crypto.randomUUID(). Math.random() is not cryptographically secure and predictable session IDs could allow session hijacking."
-      },
-      {
-        "severity": "medium",
-        "file": ".agents/skills/impeccable/scripts/live-browser.js",
-        "line": 40,
-        "description": "Sensitive token exposed in global scope without XSS protection. Browser injection scripts accessing window.__IMPECCABLE_TOKEN__ are vulnerable to other XSS attacks stealing the token. Should use postMessage API or secure iframes instead."
-      },
-      {
-        "severity": "medium",
-        "file": ".agents/skills/impeccable/scripts/live-browser-dom.js",
-        "line": 87,
-        "description": "CSS selector escaping without HTML sanitization. The cssId() function properly escapes CSS but DOM injection methods (uiAppend, uiAppendStyle) don't sanitize HTML content, risking XSS if user-controlled data flows through."
-      },
-      {
-        "severity": "medium",
-        "file": ".agents/skills/impeccable/scripts/live-browser-session.js",
-        "line": 29,
-        "description": "localStorage used without encryption for session state. Session data (including checkpointRevision, IDs) stored in plaintext localStorage. No protection if page is compromised. Consider indexedDB with encryption or server-side sessions."
-      },
-      {
-        "severity": "low",
-        "file": ".claude/helpers/session.js",
-        "line": 25,
-        "description": "Potential race condition in session corruption recovery. Atomic write fix (#2307) is implemented, but corrupted sessions are silently auto-recovered. Should log corruption incidents for monitoring."
-      }
-    ],
-    "riskScore": 68,
-    "recommendations": [
-      "Implement strict validation for __IMPECCABLE_TOKEN__ format (whitelist alphanumeric, check length, reject suspicious patterns) before use",
-      "Replace Math.random() fallback with always using crypto.randomUUID() or remove fallback entirely with error handling",
-      "Use postMessage API for token passing between frames instead of exposing to global scope. Validate origin in message handlers",
-      "Add HTML sanitization layer (DOMPurify or similar) to DOM injection methods even if content is internal",
-      "Encrypt session data in localStorage using SubtleCrypto or move session state to server with secure HTTPOnly cookies",
-      "Add Content-Security-Policy headers: script-src 'self', connect-src 'self', frame-src 'self' to reduce injection surface",
-      "Implement CSRF token validation for the localhost:PORT injection endpoint",
-      "Audit and log all localStorage access and session state changes for security monitoring",
-      "Add timeout to manual session application state (MANUAL_APPLY_STATE_TTL_MS) to prevent stale token reuse",
-      "Use Subresource Integrity (SRI) hashes if importing external scripts like live.js"
-    ]
+  "timestamp": "2026-07-14T02:09:08.934Z",
+  "mode": "local",
+  "checks": {
+    "envFilesProtected": true,
+    "gitIgnoreExists": true,
+    "noHardcodedSecrets": true
   },
-  "rawOutputPreview": "I'll analyze this codebase for security vulnerabilities. Based on the provided files, here's my structured security audit:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \".agents/skills/impeccable/scripts/live-browser.js\",\n      \"line\": 40,\n      \"description\": \"Insufficient token/port validation. Global variables __IMPECCABLE_TOKEN__ and __IMPECCABLE_PORT__ are checked for existence but not format/content validation. Attackers controlling global scope could inject malicious values. Token should be validated against expected format before use.\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \".agents/skills/impeccable/scripts/live-browser-session.js\",\n      \"line\": 16,\n      \"description\": \"Weak session ID generation fallback. Uses Math.random().toString(16).slice(2, 10) as fallback instead of crypto.randomUUID(). Math.random() is not cryptographically secure and predictable session IDs could allow session hijacking.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".agents/skills/impeccable/scripts/live-browser.js\",\n      \"line\": 40,\n      \"description\": \"Sensitive token exposed in global scope without XSS protection. Browser injection scripts accessing window.__IMPECCABLE_TOKEN__ are vulnerable to other XSS attacks stealing the token. Should use postMessage API or secure iframes instead.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".agents/skills/impeccable/scripts/live-browser-dom.js\",\n      \"line\": 87,\n      \"description\": \"CSS selector escaping without HTML sanitization. The cssId() function properly escapes CSS but DOM injection methods (uiAppend, uiAppendStyle) don't sanitize HTML content, risking XSS if user-controlled data flows through.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \".agents/skills/impeccable/scripts/live-browser-session.js\",\n      \"line\": 29,\n      \"description\": \"localStorage used without encryption for session state. Session data (including checkpointRevision, IDs) stored",
-  "rawOutputLength": 4571
+  "riskLevel": "low",
+  "recommendations": [],
+  "note": "Install Claude Code CLI for AI-powered security analysis"
 }

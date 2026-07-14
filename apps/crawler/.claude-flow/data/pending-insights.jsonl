@@ -54,3 +54,6 @@
 {"type":"edit","file":"/Users/mac/Code/marindrano/kotofetsy/apps/cli/tui.go","success":true,"timestamp":1783968305677,"sessionId":null}
 {"type":"edit","file":"/Users/mac/Code/marindrano/kotofetsy/apps/crawler/base.py","success":true,"timestamp":1783968805325,"sessionId":null}
 {"type":"edit","file":"/Users/mac/Code/marindrano/kotofetsy/apps/crawler/base.py","success":true,"timestamp":1783968975136,"sessionId":null}
+{"type":"edit","file":"/Users/mac/Code/marindrano/kotofetsy/apps/crawler/providers.py","success":true,"timestamp":1783969094008,"sessionId":null}
+{"type":"edit","file":"/Users/mac/Code/marindrano/kotofetsy/apps/crawler/providers.py","success":true,"timestamp":1783969129825,"sessionId":null}
+{"type":"edit","file":"/Users/mac/Code/marindrano/kotofetsy/apps/crawler/main.py","success":true,"timestamp":1783969166493,"sessionId":null}

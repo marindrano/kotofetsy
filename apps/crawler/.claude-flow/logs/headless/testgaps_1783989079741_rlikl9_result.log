@@ -1,0 +1,13 @@
+[2026-07-14T00:31:19.755Z] RESULT
+============================================================
+{
+  "success": false,
+  "output": "",
+  "durationMs": 14,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "testgaps",
+  "timestamp": "2026-07-14T00:31:19.755Z",
+  "executionId": "testgaps_1783989079741_rlikl9",
+  "error": "Process exited with code null"
+}

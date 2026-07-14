@@ -1,109 +1,114 @@
 {
-  "timestamp": "2026-07-13T18:51:20.641Z",
+  "timestamp": "2026-07-14T04:24:21.109Z",
   "mode": "headless",
   "workerType": "optimize",
   "model": "sonnet",
-  "durationMs": 216071,
-  "executionId": "optimize_1783968464570_hqmmiz",
+  "durationMs": 110290,
+  "executionId": "optimize_1784002950819_wqzv5j",
   "success": true,
   "findings": {
     "sections": [
       {
-        "title": "1. Redundant computation — body text extracted twice per paragraph",
-        "content": "\n`base.py:183-187`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)\n)\n```\n`get_all_text(strip=True)` walks the DOM subtree and re-strips text — it's called **twice per paragraph** (once in the filter, once in the join). For long articles this doubles the CSS/text-extraction cost for no reason.\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for text in (p.get_all_text(strip=True) for p in page.css(s.body))\n    if text\n)\n```\n\n",
+        "title": "Performance Analysis — `apps/crawler`",
+        "content": "\nThis is a synchronous Python crawler (11 news-site scrapers), not a web app with a DB/React layer, so I'm mapping your checklist onto what actually exists here: serial network I/O (the N+1 equivalent), redundant computation, unbounded state growth (the \"memory leak\" equivalent), and caching gaps.\n\n",
         "level": 2
       },
       {
-        "title": "2. N+1-equivalent: full-state disk write on every single article",
-        "content": "\n`base.py:308-314` (inside the `crawl()` loop):\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n), every iteration\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                    # full JSON re-serialize + write + rename, every iteration\n```\nThis is the disk-I/O analogue of N+1: for a run of `n` new articles, you get `n` full `sorted()` passes over a set that keeps growing (O(n² log n) total) plus `n` full-file rewrites of the entire state (which also contains the growing `seen_urls` list — this gets worse for providers with large backlogs, e.g. Midi's ~118 sitemap files). It's deliberately resumable-by-design (checkpoint per article, per the docstring), so you don't want to remove the safety property — but you can keep resumability while cutting the redundant work:\n\n```python\n",
-        "level": 2
+        "title": "1. Serial per-article fetching — the real \"N+1\" here",
+        "content": "`base.py:301-330` — `crawl()` calls `self.parse_article(url)` **one URL at a time, synchronously**, for every article a provider discovers. For a provider like `freenews-mg` (~3200 posts) or `malagasynews-mbs` (177KB of seen URLs already), that's thousands of sequential blocking HTTP round-trips per run.\n\n```python\n",
+        "level": 3
       },
       {
-        "title": "seen_sorted is only needed for JSON serialization; keep it as a list and append instead of re-sorting",
-        "content": "seen_list = state.setdefault(\"seen_urls\", [])\n...\nseen_list.append(url)          # O(1) instead of O(n log n) sort every time\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)\n```\nDropping the `sorted()` (it's only there for readability of the JSON file, not correctness — the field is read back into a `set()` anyway at `base.py:283`) removes the quadratic term entirely.\n\n",
+        "title": "base.py:301",
+        "content": "for url in self.list_article_urls():\n    ...\n    article = self.parse_article(url)   # <- one full HTTP fetch, waited on serially\n```\n\n**Fix:** batch discovered URLs and fetch concurrently (e.g. `concurrent.futures.ThreadPoolExecutor`, since `scrapling`'s `Fetcher` is a blocking call), keeping the existing checkpoint-after-each-save semantics:\n\n```python\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\n\ndef crawl(self, limit=10, on_save=None, max_workers=8):\n    ...\n    urls = (u for u in self.list_article_urls() if u not in seen)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        futures = {}\n        for url in urls:\n            futures[pool.submit(self.parse_article, url)] = url\n            if limit > 0 and len(futures) >= limit * 2:  # cap in-flight batch\n                break\n        for future in as_completed(futures):\n            url = futures[future]\n            ... # same save/skip/error handling as today\n```\nRespect `needs_stealth` sites (Midi) separately — those go through a headless-browser fetcher and shouldn't be over-parallelized the same way plain HTTP sites are.\n\n",
         "level": 1
       },
       {
-        "title": "3. Redundant network fetch — Moov provider fetches every page twice",
-        "content": "\n`providers.py:224-236`, already self-documented in the comment above it:\n```python\n",
-        "level": 2
+        "title": "2. Duplicate fetch in `Moov.list_article_urls`",
+        "content": "`providers.py:239-247` — every article page is fetched **twice**: once during frontier expansion (`Fetcher.get(url, ...)` at line 243) and again inside `parse_article` (`base.py:188`). The comment even acknowledges this (\"each page is fetched twice... acceptable for a small site\"), but it's a straightforward fix:\n\n```python\ndef list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # stash it\n        yield url\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n",
+        "level": 3
       },
       {
-        "title": "... each page is fetched twice (once here to expand the frontier, once in parse_article)",
-        "content": "```\n`list_article_urls()` fetches a page to discover outgoing `/article/` links, then `crawl()` calls `parse_article(url)` which fetches the *same URL again* to extract title/body/etc. That's a literal duplicate HTTP request per article.\n\n**Fix**: cache the already-fetched page and let `parse_article` reuse it instead of re-fetching:\n```python\ndef list_article_urls(self):\n    queued: set[str] = set()\n    queue: deque[str] = deque()\n    self._page_cache: dict[str, object] = {}   # url -> fetched page\n\n    def enqueue(href):\n        ...\n\n    home = Fetcher.get(self._seed_url, headers={\"User-Agent\": USER_AGENT})\n    for link in home.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n\n    while queue:\n        url = queue.popleft()\n        yield url\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # reuse in parse_article\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n",
+        "title": "in parse_article / fetch():",
+        "content": "def fetch(self, url):\n    cached = getattr(self, \"_page_cache\", {}).pop(url, None)\n    if cached is not None:\n        return cached\n    ...\n```\n\n",
         "level": 1
       },
       {
-        "title": "override fetch() to check the cache first",
-        "content": "def fetch(self, url):\n    cached = self._page_cache.pop(url, None)\n    return cached if cached is not None else super().fetch(url)\n```\nThis halves Moov's HTTP traffic.\n\n",
+        "title": "3. State file: O(n) rewrite + full re-sort on every single article",
+        "content": "`base.py:170-173` (`_append_article`) and `crawl()` (`base.py:315-327`) — after **every article**, the entire `seen_urls` set is re-sorted and the whole state JSON is re-serialized and rewritten to disk:\n\n```python\nstate[\"seen_urls\"] = sorted(seen)     # O(n log n), every article\nself._save_state(state)               # full JSON dump + write, every article\n```\n\nState files are already 100–180KB (`lgdi-madagascar.json` 114KB, `malagasynews-mbs.json` 177KB) and only grow. This makes each crawl run **O(n²)**: processing `k` new articles against `n` already-seen URLs costs `O(k · n log n)` instead of `O(k log n)`.\n\n**Fix:** don't re-sort every write — sorting is only for JSON readability/diffability, not correctness (it's used as a `set` via membership check). Either drop the sort entirely, or use `bisect.insort` to keep it sorted incrementally:\n\n```python\nimport bisect\n\n",
+        "level": 3
+      },
+      {
+        "title": "seen_urls_sorted: list[str], kept sorted; seen: set[str] for O(1) membership",
+        "content": "def _mark_seen(self, url: str) -> None:\n    self.seen.add(url)\n    bisect.insort(self.seen_urls_sorted, url)   # O(log n) find + O(n) insert, still far cheaper than full sort\n```\nBetter still: move seen-URL tracking to SQLite (`sqlite3`, stdlib, no new dependency) with a `url TEXT PRIMARY KEY` table — O(1) indexed lookups/inserts, no full-file rewrite per article, and it scales indefinitely without the JSON file ballooning.\n\n",
         "level": 1
       },
       {
-        "title": "4. Caching opportunity — FreeNews already has the content, fetches it again",
-        "content": "\n`providers.py:171-191`, also self-documented:\n```python\n",
-        "level": 2
+        "title": "4. Redundant text extraction in `parse_article`",
+        "content": "`base.py:196-200`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <- calls get_all_text() again, per paragraph\n)\n```\n`get_all_text(strip=True)` is invoked **twice per paragraph element** (once to filter, once to join) — doubles the text-extraction cost for every article body. Fix:\n```python\nbody = \"\\n\\n\".join(\n    text for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)\n```\n\n",
+        "level": 3
       },
       {
-        "title": "We ask only for `link` and still fetch each article page in parse_article (uniform",
-        "content": "",
+        "title": "5. No HTTP connection reuse for raw `urllib` calls",
+        "content": "`base.py:57-58` (`_fetch_xml`) and `providers.py:179-180` (`FreeNews._fetch_page`) each call `urllib.request.urlopen(req, ...)` directly — a fresh TCP+TLS handshake per call, no keep-alive/session reuse. This matters for Midi's ~118 sitemap sub-files (`docs/news-providers.md` reference in `providers.py:20`) and FreeNews's paginated REST API (~32 pages for 3200 posts). Fix: build one `urllib.request.OpenerDirector` (or switch to `requests.Session()` / `httpx.Client()`) and reuse it across all calls in a run so connections pool per-host.\n\n",
+        "level": 3
+      },
+      {
+        "title": "6. Per-write file open/close overhead",
+        "content": "`base.py:164-173` (`_log`, `_append_article`) open, write, and close the file on **every single call** rather than holding one open handle for the duration of `crawl()`. This is deliberate for crash-safety (each write is durable) but the open/close syscall pair is unnecessary — you can keep the file open for the run and just `flush()`+optionally `os.fsync()` after each write to get the same durability guarantee at a fraction of the syscall cost:\n```python\n",
+        "level": 3
+      },
+      {
+        "title": "open once per crawl() call, write+flush per article, close in a finally",
+        "content": "with self._log_path.open(\"a\", encoding=\"utf-8\") as f:\n    ...\n    f.write(line); f.flush()\n```\n\n",
         "level": 1
       },
       {
-        "title": "with other providers); ponytail ceiling: the API already carries content.rendered —",
-        "content": "",
-        "level": 1
+        "title": "7. Providers run fully sequentially in `main.py`",
+        "content": "`main.py:18-27` — `for name in names: source.crawl(...)` runs each provider's entire crawl to completion before starting the next. Since these are independent, I/O-bound scrapers, running them concurrently (e.g. `multiprocessing.Pool` or one thread per provider, since crawl work is dominated by network wait) would let the run finish in roughly `max(provider_time)` instead of `sum(provider_time)`. Note the comment in `providers.py:50-53` implies concurrent provider execution *already* happens today (likely orchestrated by an external Go TUI spawning `main.py` once per provider) — if so this is already handled outside this file, worth confirming with whoever owns that orchestrator rather than adding a second layer of concurrency here.\n\n",
+        "level": 3
       },
       {
-        "title": "consume it directly if the extra per-article fetch ever becomes a problem.",
-        "content": "```\nThe WordPress REST API response already contains `content.rendered` (and `title.rendered`, `date`, etc.) — the code discards that and does a full extra page fetch per article just to re-parse the same content out of HTML. Requesting `_fields=link,title,content,date` and building the `Article` directly from the API response would eliminate ~3200 redundant page fetches for this provider entirely. This is the closest thing in the codebase to a genuine N+1 pattern (1 cheap list call + N expensive per-item fetches where the data was already available in the list call).\n\n",
-        "level": 1
-      },
-      {
-        "title": "5. Unbounded growth (not a leak, but worth flagging)",
-        "content": "\n`seen_urls` is loaded fully into memory and re-serialized to a single JSON file in full on every save (`base.py:138-149`). For `--limit 0` (unlimited) runs against large archives, this file — and the in-memory list — grows without bound and every write becomes more expensive than the last. Not a leak (nothing is unreferenced), but the current \"one big JSON array\" design doesn't scale past a few tens of thousands of URLs. If any provider's backlog gets that large, moving `seen_urls` to a flat append-only file (one URL per line, like `_append_article` already does for articles) or a small SQLite index would turn each checkpoint into an O(1) append instead of an O(n) rewrite.\n\n",
-        "level": 2
-      },
-      {
-        "title": "6. Resource lifecycle — `StealthyFetcher` per article (worth verifying)",
-        "content": "`base.py:162-165`:\n```python\ndef fetch(self, url: str):\n    if self.needs_stealth:\n        return StealthyFetcher.fetch(url)\n    return Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n```\n`needs_stealth=True` (Midi) implies a headless-browser-backed fetch (Scrapling's `StealthyFetcher` wraps Playwright/Camoufox). If it spins up a fresh browser/context per call rather than reusing one across the crawl, that's a significant per-article overhead and potential process/memory buildup over a long run. I didn't confirm this from Scrapling's internals (couldn't inspect the installed package in this sandbox) — worth checking whether `StealthyFetcher` exposes a persistent-session mode, since Midi is the one provider using it and it has the largest sitemap (~118 sub-files).\n\n---\n\n**Priority order**: #2 (state write) and #1 (double text extraction) are free wins with no behavior change. #3 and #4 cut real network load in half or more for their providers. #5/#6 only matter once a provider's backlog or run length grows significantly — flag but don't over-invest unless that's actually happening.",
-        "level": 2
+        "title": "Out of scope",
+        "content": "\"Unnecessary React re-renders\" doesn't apply — there's no React/frontend code inside `apps/crawler` (my session tooling is scoped to this directory; `apps/web` showed up in `git status` but I can't read it from here). If you want that analysis too, point me at `apps/web` directly or lift the directory restriction.\n\n---\n**Priority order if you want me to implement:** #1 (concurrent article fetch) and #3 (state file O(n²) fix) are the highest-impact — #1 cuts wall-clock time on large providers dramatically, #3 fixes a growing-worse-over-time cost that's already visible in your state file sizes. Want me to implement either?",
+        "level": 3
       }
     ],
     "codeBlocks": [
       {
         "language": "python",
-        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)\n)"
+        "code": "# base.py:301\nfor url in self.list_article_urls():\n    ...\n    article = self.parse_article(url)   # <- one full HTTP fetch, waited on serially"
       },
       {
         "language": "python",
-        "code": "body = \"\\n\\n\".join(\n    text\n    for text in (p.get_all_text(strip=True) for p in page.css(s.body))\n    if text\n)"
+        "code": "from concurrent.futures import ThreadPoolExecutor, as_completed\n\ndef crawl(self, limit=10, on_save=None, max_workers=8):\n    ...\n    urls = (u for u in self.list_article_urls() if u not in seen)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        futures = {}\n        for url in urls:\n            futures[pool.submit(self.parse_article, url)] = url\n            if limit > 0 and len(futures) >= limit * 2:  # cap in-flight batch\n                break\n        for future in as_completed(futures):\n            url = futures[future]\n            ... # same save/skip/error handling as today"
       },
       {
         "language": "python",
-        "code": "seen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n), every iteration\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                    # full JSON re-serialize + write + rename, every iteration"
+        "code": "def list_article_urls(self):\n    ...\n    while queue:\n        url = queue.popleft()\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # stash it\n        yield url\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n# in parse_article / fetch():\ndef fetch(self, url):\n    cached = getattr(self, \"_page_cache\", {}).pop(url, None)\n    if cached is not None:\n        return cached\n    ..."
       },
       {
         "language": "python",
-        "code": "# seen_sorted is only needed for JSON serialization; keep it as a list and append instead of re-sorting\nseen_list = state.setdefault(\"seen_urls\", [])\n...\nseen_list.append(url)          # O(1) instead of O(n log n) sort every time\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)"
+        "code": "state[\"seen_urls\"] = sorted(seen)     # O(n log n), every article\nself._save_state(state)               # full JSON dump + write, every article"
       },
       {
         "language": "python",
-        "code": "# ... each page is fetched twice (once here to expand the frontier, once in parse_article)"
+        "code": "import bisect\n\n# seen_urls_sorted: list[str], kept sorted; seen: set[str] for O(1) membership\ndef _mark_seen(self, url: str) -> None:\n    self.seen.add(url)\n    bisect.insort(self.seen_urls_sorted, url)   # O(log n) find + O(n) insert, still far cheaper than full sort"
       },
       {
         "language": "python",
-        "code": "def list_article_urls(self):\n    queued: set[str] = set()\n    queue: deque[str] = deque()\n    self._page_cache: dict[str, object] = {}   # url -> fetched page\n\n    def enqueue(href):\n        ...\n\n    home = Fetcher.get(self._seed_url, headers={\"User-Agent\": USER_AGENT})\n    for link in home.css(\"a[href*='/article/']\"):\n        enqueue(link.attrib.get(\"href\"))\n\n    while queue:\n        url = queue.popleft()\n        yield url\n        try:\n            page = Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})\n        except Exception:\n            continue\n        self._page_cache[url] = page          # reuse in parse_article\n        for link in page.css(\"a[href*='/article/']\"):\n            enqueue(link.attrib.get(\"href\"))\n\n# override fetch() to check the cache first\ndef fetch(self, url):\n    cached = self._page_cache.pop(url, None)\n    return cached if cached is not None else super().fetch(url)"
+        "code": "body = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)   # <- calls get_all_text() again, per paragraph\n)"
       },
       {
         "language": "python",
-        "code": "# We ask only for `link` and still fetch each article page in parse_article (uniform\n# with other providers); ponytail ceiling: the API already carries content.rendered —\n# consume it directly if the extra per-article fetch ever becomes a problem."
+        "code": "body = \"\\n\\n\".join(\n    text for p in page.css(s.body)\n    if (text := p.get_all_text(strip=True))\n)"
       },
       {
         "language": "python",
-        "code": "def fetch(self, url: str):\n    if self.needs_stealth:\n        return StealthyFetcher.fetch(url)\n    return Fetcher.get(url, headers={\"User-Agent\": USER_AGENT})"
+        "code": "# open once per crawl() call, write+flush per article, close in a finally\nwith self._log_path.open(\"a\", encoding=\"utf-8\") as f:\n    ...\n    f.write(line); f.flush()"
       }
     ]
   },
-  "rawOutputPreview": "This is a Python web-scraping/crawler project (`base.py`, `providers.py`, `main.py`, `models.py`) — no database ORM and no React, so the literal \"N+1 query\" / \"React re-render\" categories don't apply. I mapped the same underlying failure modes (redundant round-trips, wasted recomputation, unbounded growth) onto what's actually here.\n\n## 1. Redundant computation — body text extracted twice per paragraph\n\n`base.py:183-187`:\n```python\nbody = \"\\n\\n\".join(\n    p.get_all_text(strip=True)\n    for p in page.css(s.body)\n    if p.get_all_text(strip=True)\n)\n```\n`get_all_text(strip=True)` walks the DOM subtree and re-strips text — it's called **twice per paragraph** (once in the filter, once in the join). For long articles this doubles the CSS/text-extraction cost for no reason.\n\n```python\nbody = \"\\n\\n\".join(\n    text\n    for text in (p.get_all_text(strip=True) for p in page.css(s.body))\n    if text\n)\n```\n\n## 2. N+1-equivalent: full-state disk write on every single article\n\n`base.py:308-314` (inside the `crawl()` loop):\n```python\nseen.add(url)\nsaved.append(article)\nself._append_article(article)\nstate[\"seen_urls\"] = sorted(seen)          # O(n log n), every iteration\nstate[\"total_saved\"] = state.get(\"total_saved\", 0) + 1\nstate[\"last_run_at\"] = datetime.now(timezone.utc).isoformat()\nself._save_state(state)                    # full JSON re-serialize + write + rename, every iteration\n```\nThis is the disk-I/O analogue of N+1: for a run of `n` new articles, you get `n` full `sorted()` passes over a set that keeps growing (O(n² log n) total) plus `n` full-file rewrites of the entire state (which also contains the growing `seen_urls` list — this gets worse for providers with large backlogs, e.g. Midi's ~118 sitemap files). It's deliberately resumable-by-design (checkpoint per article, per the docstring), so you don't want to remove the safety property — but you can keep resumability while cutting the redundant work:\n\n```python\n# seen_sorted is only needed for JSON serialization; keep ",
-  "rawOutputLength": 6926
+  "rawOutputPreview": "I have enough evidence now (state files already 100–180KB of URL lists) to write up concrete findings. This is a Python news crawler (no DB, no React) — I'll map the requested categories onto their real equivalents here: network I/O fan-out instead of N+1 queries, and skip the React section since no frontend code exists in `apps/crawler`.\n\n## Performance Analysis — `apps/crawler`\n\nThis is a synchronous Python crawler (11 news-site scrapers), not a web app with a DB/React layer, so I'm mapping your checklist onto what actually exists here: serial network I/O (the N+1 equivalent), redundant computation, unbounded state growth (the \"memory leak\" equivalent), and caching gaps.\n\n### 1. Serial per-article fetching — the real \"N+1\" here\n`base.py:301-330` — `crawl()` calls `self.parse_article(url)` **one URL at a time, synchronously**, for every article a provider discovers. For a provider like `freenews-mg` (~3200 posts) or `malagasynews-mbs` (177KB of seen URLs already), that's thousands of sequential blocking HTTP round-trips per run.\n\n```python\n# base.py:301\nfor url in self.list_article_urls():\n    ...\n    article = self.parse_article(url)   # <- one full HTTP fetch, waited on serially\n```\n\n**Fix:** batch discovered URLs and fetch concurrently (e.g. `concurrent.futures.ThreadPoolExecutor`, since `scrapling`'s `Fetcher` is a blocking call), keeping the existing checkpoint-after-each-save semantics:\n\n```python\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\n\ndef crawl(self, limit=10, on_save=None, max_workers=8):\n    ...\n    urls = (u for u in self.list_article_urls() if u not in seen)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        futures = {}\n        for url in urls:\n            futures[pool.submit(self.parse_article, url)] = url\n            if limit > 0 and len(futures) >= limit * 2:  # cap in-flight batch\n                break\n        for future in as_completed(futures):\n            url = futures[future]\n            ... # same sa",
+  "rawOutputLength": 7848
 }

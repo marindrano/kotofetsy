@@ -1,0 +1,50 @@
+[2026-07-14T04:21:33.047Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "# Security Vulnerability Analysis Report\n\n## Overview\nThe analyzed codebase appears to be from an installed dependency (`patchright`/Playwright library) rather than the primary project code. The files shown are build/compiled JavaScript from `node_modules/.venv/`.\n\n## Vulnerability Assessment\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js\",\n      \"line\": 31,\n      \"description\": \"Port enumeration via local socket connections - allows scanning for browser instances on specific ports. While restricted to localhost, could enable local privilege escalation or information disclosure about running processes.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 45,\n      \"description\": \"Session files parsed without schema validation - malformed JSON in session files could cause crashes or unexpected behavior if session directory permissions are compromised.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js\",\n      \"line\": 29,\n      \"description\": \"Electron switches constructed with environment variables - while switches are primarily hardcoded, environment variable `PLAYWRIGHT_LEGACY_SCREENSHOT` controls feature flags without validation.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 52,\n      \"description\": \"Unencrypted localhost socket connections - DevTools connections use HTTP/ws on localhost rather than local sockets, reducing isolation guarantees.\"\n    }\n  ],\n  \"riskScore\": 18,\n  \"recommendations\": [\n    \"Verify that session files in daemon directories have restrictive permissions (0600 on Unix)\",\n    \"Ensure socket connections use Unix domain sockets rather than TCP ports where possible\",\n    \"Validate all configuration loaded from session JSON files with a schema validator\",\n    \"Environment variables controlling feature flags should have whitelisted values, not truthy checks\",\n    \"Run browser automation processes with minimal required privileges\",\n    \"Keep Playwright/patchright dependency updated to latest version (`npm audit fix`)\",\n    \"Consider using tool-specific audit: `npm audit` to check for known vulnerabilities in dependencies\"\n  ]\n}\n```\n\n## Key Findings\n\n**No Critical Vulnerabilities Found** — This appears to be well-maintained library code from the Playwright project (Microsoft).\n\n**Primary Risk Vectors:**\n- ✅ **SQL Injection**: N/A (no database code)\n- ✅ **XSS**: N/A (internal library, not web-facing)\n- ✅ **Hardcoded Secrets**: None found\n- ⚠️ **Local Privilege Escalation**: Medium - via session file access or port scanning\n- ⚠️ **Insecure Defaults**: Low - localhost-only connections\n\n## Note\n\nThe files analyzed are from an installed npm dependency, not your project's source code. To audit your actual codebase, please provide files from:\n- `src/`\n- `lib/`\n- `main.py`, `providers.py` (shown in git status)\n- API/server code\n\nRun `npm audit` and `pip check` to identify known vulnerabilities in your dependencies.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js",
+        "line": 31,
+        "description": "Port enumeration via local socket connections - allows scanning for browser instances on specific ports. While restricted to localhost, could enable local privilege escalation or information disclosure about running processes."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 45,
+        "description": "Session files parsed without schema validation - malformed JSON in session files could cause crashes or unexpected behavior if session directory permissions are compromised."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js",
+        "line": 29,
+        "description": "Electron switches constructed with environment variables - while switches are primarily hardcoded, environment variable `PLAYWRIGHT_LEGACY_SCREENSHOT` controls feature flags without validation."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
+        "line": 52,
+        "description": "Unencrypted localhost socket connections - DevTools connections use HTTP/ws on localhost rather than local sockets, reducing isolation guarantees."
+      }
+    ],
+    "riskScore": 18,
+    "recommendations": [
+      "Verify that session files in daemon directories have restrictive permissions (0600 on Unix)",
+      "Ensure socket connections use Unix domain sockets rather than TCP ports where possible",
+      "Validate all configuration loaded from session JSON files with a schema validator",
+      "Environment variables controlling feature flags should have whitelisted values, not truthy checks",
+      "Run browser automation processes with minimal required privileges",
+      "Keep Playwright/patchright dependency updated to latest version (`npm audit fix`)",
+      "Consider using tool-specific audit: `npm audit` to check for known vulnerabilities in dependencies"
+    ]
+  },
+  "durationMs": 62202,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-14T04:21:33.047Z",
+  "executionId": "audit_1784002830845_gr5b00"
+}

@@ -1,0 +1,13 @@
+[2026-07-14T00:13:41.005Z] RESULT
+============================================================
+{
+  "success": false,
+  "output": "",
+  "durationMs": 61,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-14T00:13:41.005Z",
+  "executionId": "audit_1783988020944_i5gc14",
+  "error": "Process exited with code null"
+}

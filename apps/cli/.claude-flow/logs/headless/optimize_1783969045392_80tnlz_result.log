@@ -1,0 +1,69 @@
+[2026-07-13T19:00:15.190Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "## Codebase reality check\n\nThis directory (`apps/cli`) is a **543-line Go TUI** (Bubble Tea) that shells out to a Python crawler — there's no database layer, no ORM, and no React. So \"N+1 queries\" and \"React re-renders\" don't literally apply. I mapped your ask onto the closest real equivalents in this code (redundant recomputation, TUI re-render cost, unbounded memory growth) rather than inventing findings that don't exist. If you meant `apps/crawler` (the Python side with the actual DB/HTTP calls), let me know and I'll analyze that instead — my tool access this session is scoped to `apps/cli`.\n\n### 1. Redundant computation: `articlesSaved` rescans full history every render\n`tui.go:363-373` and its call site `tui.go:403`:\n\n```go\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}\n```\n\n`viewRunning()` calls this **for every provider, on every `View()` call** — and `View()` fires on every single `statusMsg` (i.e., every stdout line from every crawler subprocess). For a long-running crawl with thousands of lines, this is O(n) work repeated O(n) times per provider ⇒ effectively O(n²) over the run.\n\n**Fix:** track the count incrementally on the `providerStatus` struct instead of recomputing from the full slice:\n\n```go\ntype providerStatus struct {\n    state    providerState\n    lines    []string\n    savedCnt int // incremented as lines arrive\n}\n\n// in Update(), statusMsg case:\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n    st.savedCnt++\n}\n```\nThen `viewRunning` just reads `st.savedCnt` — O(1) per provider per render.\n\n### 2. Redundant computation: `refreshViewport` rejoins entire log on every new line\n`tui.go:248-255`:\n\n```go\nfunc (m *model) refreshViewport() {\n    name := m.highlighted()\n    if name == \"\" {\n        return\n    }\n    m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n    m.vp.GotoBottom()\n}\n```\n\nCalled from the `statusMsg` handler every time a new line arrives for the currently-highlighted provider (`tui.go:114-116`). `strings.Join` re-serializes the *entire* accumulated log each time, so total work over a run with N lines is O(N²) string copying — this is the biggest real perf risk here for long/unlimited (`--limit 0`) crawls.\n\n**Fix options:**\n- Maintain a `strings.Builder` per provider that you append to and reuse, avoiding full rejoin: keep a cached rendered string and just append the new line + `\"\\n\"`.\n- Or only call `SetContent` with a bounded tail window (see #3) instead of the full history.\n\n### 3. Unbounded memory growth: per-provider log lines never capped\n`tui.go:113`, `123`: `st.lines = append(st.lines, msg.line)` — with `--limit 0` (\"run until exhausted\"), a noisy provider can accumulate an unbounded number of lines held in memory for the life of the process. Not a \"leak\" (no dangling references), but unbounded growth that also compounds problem #2.\n\n**Fix:** cap retained lines with a ring buffer (e.g., keep last 2000 lines) since the viewport can only display a few dozen at once anyway:\n\n```go\nconst maxLines = 2000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLines {\n    st.lines = st.lines[len(st.lines)-maxLines:]\n}\n```\n\n### 4. Minor: `countSelected()` is O(providers) but called every keystroke/render\n`tui.go:301-309`, called from `viewPicking`/`viewLimit` (`tui.go:338`, `350`). With only 11 providers this is negligible — not worth changing, flagging only because it's the same recompute-vs-track-incrementally pattern as #1/#2, in case the provider list grows significantly later.\n\n### 5. Caching opportunity: none needed here\nThere's no repeated I/O, network call, or parseable data that's fetched more than once — `runCrawler` invokes the subprocess exactly once per provider per run, and the process itself streams data as it's produced. No caching layer is applicable.\n\n### Priority\nFix **#2** first (the O(N²) `strings.Join` is the only one that can visibly degrade a long crawl session), then **#1** and **#3** together since they touch the same `statusMsg` handler.\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "Codebase reality check",
+        "content": "\nThis directory (`apps/cli`) is a **543-line Go TUI** (Bubble Tea) that shells out to a Python crawler — there's no database layer, no ORM, and no React. So \"N+1 queries\" and \"React re-renders\" don't literally apply. I mapped your ask onto the closest real equivalents in this code (redundant recomputation, TUI re-render cost, unbounded memory growth) rather than inventing findings that don't exist. If you meant `apps/crawler` (the Python side with the actual DB/HTTP calls), let me know and I'll analyze that instead — my tool access this session is scoped to `apps/cli`.\n\n",
+        "level": 2
+      },
+      {
+        "title": "1. Redundant computation: `articlesSaved` rescans full history every render",
+        "content": "`tui.go:363-373` and its call site `tui.go:403`:\n\n```go\nfunc articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}\n```\n\n`viewRunning()` calls this **for every provider, on every `View()` call** — and `View()` fires on every single `statusMsg` (i.e., every stdout line from every crawler subprocess). For a long-running crawl with thousands of lines, this is O(n) work repeated O(n) times per provider ⇒ effectively O(n²) over the run.\n\n**Fix:** track the count incrementally on the `providerStatus` struct instead of recomputing from the full slice:\n\n```go\ntype providerStatus struct {\n    state    providerState\n    lines    []string\n    savedCnt int // incremented as lines arrive\n}\n\n// in Update(), statusMsg case:\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n    st.savedCnt++\n}\n```\nThen `viewRunning` just reads `st.savedCnt` — O(1) per provider per render.\n\n",
+        "level": 3
+      },
+      {
+        "title": "2. Redundant computation: `refreshViewport` rejoins entire log on every new line",
+        "content": "`tui.go:248-255`:\n\n```go\nfunc (m *model) refreshViewport() {\n    name := m.highlighted()\n    if name == \"\" {\n        return\n    }\n    m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n    m.vp.GotoBottom()\n}\n```\n\nCalled from the `statusMsg` handler every time a new line arrives for the currently-highlighted provider (`tui.go:114-116`). `strings.Join` re-serializes the *entire* accumulated log each time, so total work over a run with N lines is O(N²) string copying — this is the biggest real perf risk here for long/unlimited (`--limit 0`) crawls.\n\n**Fix options:**\n- Maintain a `strings.Builder` per provider that you append to and reuse, avoiding full rejoin: keep a cached rendered string and just append the new line + `\"\\n\"`.\n- Or only call `SetContent` with a bounded tail window (see #3) instead of the full history.\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Unbounded memory growth: per-provider log lines never capped",
+        "content": "`tui.go:113`, `123`: `st.lines = append(st.lines, msg.line)` — with `--limit 0` (\"run until exhausted\"), a noisy provider can accumulate an unbounded number of lines held in memory for the life of the process. Not a \"leak\" (no dangling references), but unbounded growth that also compounds problem #2.\n\n**Fix:** cap retained lines with a ring buffer (e.g., keep last 2000 lines) since the viewport can only display a few dozen at once anyway:\n\n```go\nconst maxLines = 2000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLines {\n    st.lines = st.lines[len(st.lines)-maxLines:]\n}\n```\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. Minor: `countSelected()` is O(providers) but called every keystroke/render",
+        "content": "`tui.go:301-309`, called from `viewPicking`/`viewLimit` (`tui.go:338`, `350`). With only 11 providers this is negligible — not worth changing, flagging only because it's the same recompute-vs-track-incrementally pattern as #1/#2, in case the provider list grows significantly later.\n\n",
+        "level": 3
+      },
+      {
+        "title": "5. Caching opportunity: none needed here",
+        "content": "There's no repeated I/O, network call, or parseable data that's fetched more than once — `runCrawler` invokes the subprocess exactly once per provider per run, and the process itself streams data as it's produced. No caching layer is applicable.\n\n",
+        "level": 3
+      },
+      {
+        "title": "Priority",
+        "content": "Fix **#2** first (the O(N²) `strings.Join` is the only one that can visibly degrade a long crawl session), then **#1** and **#3** together since they touch the same `statusMsg` handler.",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "go",
+        "code": "func articlesSaved(lines []string) int {\n    n := 0\n    for _, l := range lines {\n        if strings.HasPrefix(l, \"  - \") {\n            n++\n        }\n    }\n    return n\n}"
+      },
+      {
+        "language": "go",
+        "code": "type providerStatus struct {\n    state    providerState\n    lines    []string\n    savedCnt int // incremented as lines arrive\n}\n\n// in Update(), statusMsg case:\nst.lines = append(st.lines, msg.line)\nif strings.HasPrefix(msg.line, \"  - \") {\n    st.savedCnt++\n}"
+      },
+      {
+        "language": "go",
+        "code": "func (m *model) refreshViewport() {\n    name := m.highlighted()\n    if name == \"\" {\n        return\n    }\n    m.vp.SetContent(strings.Join(m.statuses[name].lines, \"\\n\"))\n    m.vp.GotoBottom()\n}"
+      },
+      {
+        "language": "go",
+        "code": "const maxLines = 2000\nst.lines = append(st.lines, msg.line)\nif len(st.lines) > maxLines {\n    st.lines = st.lines[len(st.lines)-maxLines:]\n}"
+      }
+    ]
+  },
+  "durationMs": 169798,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-13T19:00:15.190Z",
+  "executionId": "optimize_1783969045392_80tnlz"
+}

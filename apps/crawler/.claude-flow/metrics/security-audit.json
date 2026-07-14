@@ -1,53 +1,49 @@
 {
-  "timestamp": "2026-07-13T18:56:07.763Z",
+  "timestamp": "2026-07-14T04:21:33.047Z",
   "mode": "headless",
   "workerType": "audit",
   "model": "haiku",
-  "durationMs": 63885,
-  "executionId": "audit_1783968903878_9mdbau",
+  "durationMs": 62202,
+  "executionId": "audit_1784002830845_gr5b00",
   "success": true,
   "findings": {
     "vulnerabilities": [
       {
         "severity": "medium",
-        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js",
         "line": 31,
-        "description": "Unsafe array splice with indexOf. If '--remote-debugging-port=0' is not found, indexOf returns -1, causing splice(1, -1) to remove all but the last element unexpectedly. This could corrupt process.argv and cause unexpected behavior.",
-        "vulnerability_type": "logic_error"
+        "description": "Port enumeration via local socket connections - allows scanning for browser instances on specific ports. While restricted to localhost, could enable local privilege escalation or information disclosure about running processes."
       },
       {
         "severity": "low",
-        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js",
-        "line": 56,
-        "description": "Untrusted file read from user data directory (DevToolsActivePort). While port validation exists, a malicious local user could potentially hijack the DevToolsActivePort file to redirect connections to an attacker-controlled service.",
-        "vulnerability_type": "local_privilege_escalation"
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js",
+        "line": 45,
+        "description": "Session files parsed without schema validation - malformed JSON in session files could cause crashes or unexpected behavior if session directory permissions are compromised."
+      },
+      {
+        "severity": "low",
+        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js",
+        "line": 29,
+        "description": "Electron switches constructed with environment variables - while switches are primarily hardcoded, environment variable `PLAYWRIGHT_LEGACY_SCREENSHOT` controls feature flags without validation."
       },
       {
         "severity": "low",
         "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js",
-        "line": 68,
-        "description": "Socket path created in daemon directory without explicit ownership or permission verification. Local privilege escalation possible if daemon directory permissions are misconfigured.",
-        "vulnerability_type": "local_privilege_escalation"
-      },
-      {
-        "severity": "low",
-        "file": ".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js",
-        "line": 14,
-        "description": "Environment variable PW_INSTRUMENT_MODULES enables code instrumentation without explicit validation. Could potentially be abused if environment is untrusted.",
-        "vulnerability_type": "configuration_exposure"
+        "line": 52,
+        "description": "Unencrypted localhost socket connections - DevTools connections use HTTP/ws on localhost rather than local sockets, reducing isolation guarantees."
       }
     ],
-    "riskScore": 28,
+    "riskScore": 18,
     "recommendations": [
-      "Fix the array splice logic in loader.js: use 'const idx = process.argv.indexOf(...); if (idx !== -1) { process.argv.splice(...) }' to safely handle missing strings",
-      "Add file ownership verification when reading DevToolsActivePort and other sensitive local files",
-      "Implement explicit socket file permission checks (0600) when creating daemon socket paths",
-      "Document and validate all environment variables that control security-relevant behavior",
-      "Consider restricting environment variable-based instrumentation to development builds only",
-      "Implement symlink attack protection when creating/reading files in user home directories",
-      "Add input validation for port numbers read from files before attempting connections"
+      "Verify that session files in daemon directories have restrictive permissions (0600 on Unix)",
+      "Ensure socket connections use Unix domain sockets rather than TCP ports where possible",
+      "Validate all configuration loaded from session JSON files with a schema validator",
+      "Environment variables controlling feature flags should have whitelisted values, not truthy checks",
+      "Run browser automation processes with minimal required privileges",
+      "Keep Playwright/patchright dependency updated to latest version (`npm audit fix`)",
+      "Consider using tool-specific audit: `npm audit` to check for known vulnerabilities in dependencies"
     ]
   },
-  "rawOutputPreview": "```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js\",\n      \"line\": 31,\n      \"description\": \"Unsafe array splice with indexOf. If '--remote-debugging-port=0' is not found, indexOf returns -1, causing splice(1, -1) to remove all but the last element unexpectedly. This could corrupt process.argv and cause unexpected behavior.\",\n      \"vulnerability_type\": \"logic_error\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js\",\n      \"line\": 56,\n      \"description\": \"Untrusted file read from user data directory (DevToolsActivePort). While port validation exists, a malicious local user could potentially hijack the DevToolsActivePort file to redirect connections to an attacker-controlled service.\",\n      \"vulnerability_type\": \"local_privilege_escalation\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 68,\n      \"description\": \"Socket path created in daemon directory without explicit ownership or permission verification. Local privilege escalation possible if daemon directory permissions are misconfigured.\",\n      \"vulnerability_type\": \"local_privilege_escalation\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/bootstrap.js\",\n      \"line\": 14,\n      \"description\": \"Environment variable PW_INSTRUMENT_MODULES enables code instrumentation without explicit validation. Could potentially be abused if environment is untrusted.\",\n      \"vulnerability_type\": \"configuration_exposure\"\n    }\n  ],\n  \"riskScore\": 28,\n  \"recommendations\": [\n    \"Fix the array splice logic in loader.js: use 'const idx = process.argv.indexOf(...); if (idx !== -1) { process.argv.splice(...) }' to safely handle ",
-  "rawOutputLength": 3383
+  "rawOutputPreview": "# Security Vulnerability Analysis Report\n\n## Overview\nThe analyzed codebase appears to be from an installed dependency (`patchright`/Playwright library) rather than the primary project code. The files shown are build/compiled JavaScript from `node_modules/.venv/`.\n\n## Vulnerability Assessment\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/channelSessions.js\",\n      \"line\": 31,\n      \"description\": \"Port enumeration via local socket connections - allows scanning for browser instances on specific ports. While restricted to localhost, could enable local privilege escalation or information disclosure about running processes.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/registry.js\",\n      \"line\": 45,\n      \"description\": \"Session files parsed without schema validation - malformed JSON in session files could cause crashes or unexpected behavior if session directory permissions are compromised.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/server/electron/loader.js\",\n      \"line\": 29,\n      \"description\": \"Electron switches constructed with environment variables - while switches are primarily hardcoded, environment variable `PLAYWRIGHT_LEGACY_SCREENSHOT` controls feature flags without validation.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \".venv/lib/python3.13/site-packages/patchright/driver/package/lib/tools/cli-client/session.js\",\n      \"line\": 52,\n      \"description\": \"Unencrypted localhost socket connections - DevTools connections use HTTP/ws on localhost rather than local sockets, reducing isolation guarantees.\"\n    }\n  ],\n  \"riskScore\": 18,\n  \"recommendations\": [\n    \"Verify that session files in daemon directories have restrictive permissions (0600 on Unix)\",\n    \"Ensure socket ",
+  "rawOutputLength": 3336
 }

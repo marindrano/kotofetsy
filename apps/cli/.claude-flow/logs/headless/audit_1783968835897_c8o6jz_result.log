@@ -1,0 +1,69 @@
+[2026-07-13T18:57:25.391Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the codebase, here's the security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 64,\n      \"description\": \"Potential path traversal: provider names from user input are passed directly to exec.CommandContext without validation. While not a shell injection (no shell is invoked), malicious provider names like '../../../etc/passwd' could be used as arguments to the Python script.\",\n      \"category\": \"input_validation\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 39,\n      \"description\": \"Path traversal vulnerability: The 'crawler-dir' flag accepts user-supplied paths without validation. An attacker could specify an arbitrary directory (e.g., '/', '../../') as the crawler directory, allowing execution of unintended scripts.\",\n      \"category\": \"path_traversal\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 44,\n      \"description\": \"Missing validation of provider names in headless mode. User-supplied provider names via the '--providers' flag are split and used without checking if they exist in the whitelist of valid providers, enabling execution of unregistered crawlers or path traversal attempts.\",\n      \"category\": \"input_validation\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"main.go\",\n      \"line\": 38,\n      \"description\": \"Missing upper bound validation on '--limit' parameter. While negative values are rejected (tui.go:190), there's no maximum limit, potentially allowing DoS attacks with extremely large values (e.g., --limit=999999999), causing memory exhaustion or indefinite execution.\",\n      \"category\": \"resource_exhaustion\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"tui.go\",\n      \"line\": 123,\n      \"description\": \"Error information disclosure: Error messages from failed crawlers are displayed directly to the user interface without sanitization. While typically non-sensitive, this could leak internal paths or Python stack traces if the crawler fails.\",\n      \"category\": \"information_disclosure\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"main.go\",\n      \"line\": 91,\n      \"description\": \"Uncontrolled concurrent subprocess execution: In headless mode, all selected providers (up to 11) run concurrently without rate limiting. An attacker could exhaust system resources by selecting all providers with a high limit value.\",\n      \"category\": \"resource_exhaustion\"\n    }\n  ],\n  \"riskScore\": 42,\n  \"recommendations\": [\n    \"1. Validate provider names against the hardcoded whitelist before using them. Add a validation function and apply it in runHeadless() after parsing the '--providers' flag.\",\n    \"2. Validate the 'crawler-dir' path to ensure it points to an expected location. Use filepath.Abs() and filepath.Clean(), then verify it matches the expected base directory (e.g., ../crawler).\",\n    \"3. Implement an upper bound on the '--limit' parameter (e.g., max 10,000 articles per provider). Reject invalid values with a clear error message.\",\n    \"4. Add rate limiting or concurrency throttling in headless mode. Consider using a sync.Semaphore or buffered channel to limit concurrent crawlers (e.g., max 3-5 concurrent).\",\n    \"5. Sanitize error messages before displaying them. Consider wrapping crawler errors to hide implementation details while preserving useful information.\",\n    \"6. Add logging of all command-line arguments for audit trails, especially in headless mode when used for automated/cron jobs.\",\n    \"7. Consider using context timeouts for individual crawler invocations to prevent hangs.\",\n    \"8. Document security constraints for headless mode usage, especially when accepting external input for provider selection.\"\n  ]\n}\n```\n\n## Summary\n\nThe CLI tool has a **moderate security risk profile** (42/100 risk score). The primary concerns are:\n\n- **Input validation gaps**: User-supplied provider names and paths aren't validated, enabling potential path traversal or execution of unintended commands\n- **Resource exhaustion**: No bounds on the limit parameter or concurrency limits could enable DoS attacks\n- **Subprocess security**: While `exec.CommandContext` prevents shell injection (no shell involvement), the arguments aren't properly validated\n\nThe codebase is reasonably clean otherwise — no hardcoded secrets, modern Go patterns, and proper context cancellation for subprocess cleanup. The vulnerabilities are primarily around accepting external input without sufficient validation.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 64,
+        "description": "Potential path traversal: provider names from user input are passed directly to exec.CommandContext without validation. While not a shell injection (no shell is invoked), malicious provider names like '../../../etc/passwd' could be used as arguments to the Python script.",
+        "category": "input_validation"
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 39,
+        "description": "Path traversal vulnerability: The 'crawler-dir' flag accepts user-supplied paths without validation. An attacker could specify an arbitrary directory (e.g., '/', '../../') as the crawler directory, allowing execution of unintended scripts.",
+        "category": "path_traversal"
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 44,
+        "description": "Missing validation of provider names in headless mode. User-supplied provider names via the '--providers' flag are split and used without checking if they exist in the whitelist of valid providers, enabling execution of unregistered crawlers or path traversal attempts.",
+        "category": "input_validation"
+      },
+      {
+        "severity": "medium",
+        "file": "main.go",
+        "line": 38,
+        "description": "Missing upper bound validation on '--limit' parameter. While negative values are rejected (tui.go:190), there's no maximum limit, potentially allowing DoS attacks with extremely large values (e.g., --limit=999999999), causing memory exhaustion or indefinite execution.",
+        "category": "resource_exhaustion"
+      },
+      {
+        "severity": "low",
+        "file": "tui.go",
+        "line": 123,
+        "description": "Error information disclosure: Error messages from failed crawlers are displayed directly to the user interface without sanitization. While typically non-sensitive, this could leak internal paths or Python stack traces if the crawler fails.",
+        "category": "information_disclosure"
+      },
+      {
+        "severity": "low",
+        "file": "main.go",
+        "line": 91,
+        "description": "Uncontrolled concurrent subprocess execution: In headless mode, all selected providers (up to 11) run concurrently without rate limiting. An attacker could exhaust system resources by selecting all providers with a high limit value.",
+        "category": "resource_exhaustion"
+      }
+    ],
+    "riskScore": 42,
+    "recommendations": [
+      "1. Validate provider names against the hardcoded whitelist before using them. Add a validation function and apply it in runHeadless() after parsing the '--providers' flag.",
+      "2. Validate the 'crawler-dir' path to ensure it points to an expected location. Use filepath.Abs() and filepath.Clean(), then verify it matches the expected base directory (e.g., ../crawler).",
+      "3. Implement an upper bound on the '--limit' parameter (e.g., max 10,000 articles per provider). Reject invalid values with a clear error message.",
+      "4. Add rate limiting or concurrency throttling in headless mode. Consider using a sync.Semaphore or buffered channel to limit concurrent crawlers (e.g., max 3-5 concurrent).",
+      "5. Sanitize error messages before displaying them. Consider wrapping crawler errors to hide implementation details while preserving useful information.",
+      "6. Add logging of all command-line arguments for audit trails, especially in headless mode when used for automated/cron jobs.",
+      "7. Consider using context timeouts for individual crawler invocations to prevent hangs.",
+      "8. Document security constraints for headless mode usage, especially when accepting external input for provider selection."
+    ]
+  },
+  "durationMs": 209494,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-13T18:57:25.391Z",
+  "executionId": "audit_1783968835897_c8o6jz"
+}
